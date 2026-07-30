@@ -4,6 +4,7 @@ import {
   buttons,
   cabinetKeyboard,
   districtInlineKeyboard,
+  languageKeyboard,
   mainMenuKeyboard,
   phoneKeyboard,
   regionInlineKeyboard,
@@ -52,19 +53,83 @@ async function askDistrict(ctx: BotContext, region: Region): Promise<void> {
   });
 }
 
+async function sendRegistrationSuccess(ctx: BotContext): Promise<void> {
+  if (env.successStickerId) {
+    await ctx.replyWithSticker(env.successStickerId);
+  } else {
+    await ctx.reply("✅");
+  }
+
+  await ctx.reply(
+    `${t(ctx.dbUser.language, "congratulations")}\n${t(ctx.dbUser.language, "registrationSuccess")}\n\n${t(
+      ctx.dbUser.language,
+      "mainMenu",
+    )}`,
+    {
+      reply_markup: mainMenuKeyboard(ctx.dbUser.language),
+    },
+  );
+}
+
+async function repeatCurrentStep(ctx: BotContext): Promise<void> {
+  const user = ctx.dbUser;
+
+  if (user.step === "ASK_FULL_NAME") {
+    await ctx.reply(t(user.language, "askFullName"), {
+      reply_markup: languageKeyboard(user.language),
+    });
+    return;
+  }
+
+  if (user.step === "ASK_PHONE") {
+    await ctx.reply(t(user.language, "askPhone"), {
+      reply_markup: phoneKeyboard(user.language),
+    });
+    return;
+  }
+
+  if (user.step === "ASK_REGION") {
+    await askRegion(ctx);
+    return;
+  }
+
+  if (user.step === "ASK_DISTRICT") {
+    const region = user.selectedRegion ? getRegion(user.selectedRegion) : null;
+
+    if (region) {
+      await askDistrict(ctx, region);
+      return;
+    }
+
+    await askRegion(ctx);
+    return;
+  }
+
+  if (user.step === "ASK_PROMO_CODE") {
+    await ctx.reply(t(user.language, "promoCodeAsk"), {
+      reply_markup: languageKeyboard(user.language),
+    });
+    return;
+  }
+
+  await ctx.reply(t(user.language, "mainMenu"), {
+    reply_markup: mainMenuKeyboard(user.language),
+  });
+}
+
 export function registerHandlers(bot: Bot<BotContext>, userService: UserService): void {
   bot.command("start", async (ctx) => {
     ctx.dbUser.step = "ASK_FULL_NAME";
     await userService.setStep(ctx.dbUser, "ASK_FULL_NAME");
     await ctx.reply(`${t(ctx.dbUser.language, "start")}\n\n${t(ctx.dbUser.language, "askFullName")}`, {
-      reply_markup: { remove_keyboard: true },
+      reply_markup: languageKeyboard(ctx.dbUser.language),
     });
   });
 
   bot.hears([buttons.uz.promoSend, buttons.ru.promoSend], async (ctx) => {
     await userService.setStep(ctx.dbUser, "ASK_PROMO_CODE");
     await ctx.reply(t(ctx.dbUser.language, "promoCodeAsk"), {
-      reply_markup: { remove_keyboard: true },
+      reply_markup: languageKeyboard(ctx.dbUser.language),
     });
   });
 
@@ -119,14 +184,20 @@ export function registerHandlers(bot: Bot<BotContext>, userService: UserService)
 
   bot.hears([buttons.uz.languageUz, buttons.ru.languageUz], async (ctx) => {
     ctx.dbUser.language = "uz";
-    await userService.setStep(ctx.dbUser, "MENU");
-    await ctx.reply(t("uz", "languageChanged"), { reply_markup: mainMenuKeyboard("uz") });
+    await userService.setStep(ctx.dbUser, ctx.dbUser.step);
+    await ctx.reply(t("uz", "languageChanged"), {
+      reply_markup: languageKeyboard("uz"),
+    });
+    await repeatCurrentStep(ctx);
   });
 
   bot.hears([buttons.uz.languageRu, buttons.ru.languageRu], async (ctx) => {
     ctx.dbUser.language = "ru";
-    await userService.setStep(ctx.dbUser, "MENU");
-    await ctx.reply(t("ru", "languageChanged"), { reply_markup: mainMenuKeyboard("ru") });
+    await userService.setStep(ctx.dbUser, ctx.dbUser.step);
+    await ctx.reply(t("ru", "languageChanged"), {
+      reply_markup: languageKeyboard("ru"),
+    });
+    await repeatCurrentStep(ctx);
   });
 
   bot.hears([buttons.uz.changeRegion, buttons.ru.changeRegion], async (ctx) => {
@@ -158,12 +229,14 @@ export function registerHandlers(bot: Bot<BotContext>, userService: UserService)
       return;
     }
 
-    ctx.dbUser.selectedRegion = region;
-    await userService.setStep(ctx.dbUser, "ASK_DISTRICT");
+    ctx.dbUser.address = region;
+    ctx.dbUser.selectedRegion = null;
+    await userService.setStep(ctx.dbUser, "MENU");
     await ctx.answerCallbackQuery(`${region} ${t(ctx.dbUser.language, "regionSelected")}`);
-    await ctx.editMessageReplyMarkup().catch(() => undefined);
-    await ctx.reply(`${region} ${t(ctx.dbUser.language, "regionSelected")}`);
-    await askDistrict(ctx, region);
+    await ctx.deleteMessage().catch(async () => {
+      await ctx.editMessageReplyMarkup().catch(() => undefined);
+    });
+    await sendRegistrationSuccess(ctx);
   });
 
   bot.callbackQuery(/^district:(\d+):(\d+)$/, async (ctx) => {
@@ -251,10 +324,12 @@ export function registerHandlers(bot: Bot<BotContext>, userService: UserService)
         return;
       }
 
-      user.selectedRegion = region;
-      user.step = "ASK_DISTRICT";
-      await userService.setStep(user, "ASK_DISTRICT");
-      await askDistrict(ctx, region);
+      user.address = region;
+      user.selectedRegion = null;
+      user.step = "MENU";
+      await userService.setStep(user, "MENU");
+      await ctx.reply(`${region} ${t(user.language, "regionSelected")}`);
+      await sendRegistrationSuccess(ctx);
       return;
     }
 

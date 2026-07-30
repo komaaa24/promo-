@@ -3,6 +3,7 @@ import { DataSource } from "typeorm";
 import { env } from "../config/env";
 import { PromoCode } from "../entities/PromoCode";
 import { TelegramUser } from "../entities/TelegramUser";
+import { InitialSchema1720000000000 } from "./migrations/1720000000000-InitialSchema";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -11,7 +12,8 @@ export const AppDataSource = new DataSource({
   username: env.database.username,
   password: env.database.password,
   database: env.database.database,
-  synchronize: env.nodeEnv !== "production",
+  synchronize: false,
   logging: env.nodeEnv === "development" ? ["error", "warn"] : ["error"],
   entities: [TelegramUser, PromoCode],
+  migrations: [InitialSchema1720000000000],
 });

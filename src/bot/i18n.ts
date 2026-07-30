@@ -13,6 +13,8 @@ type MessageKey =
   | "invalidFullName"
   | "invalidPhone"
   | "savedProfile"
+  | "registrationSuccess"
+  | "congratulations"
   | "promoCodeAsk"
   | "promoCodeSaved"
   | "promoCodesEmpty"
@@ -40,6 +42,8 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     invalidFullName: "Iltimos, ism va familiyangizni to'liq kiriting.",
     invalidPhone: "Telefon raqam noto'g'ri. Masalan: +998901234567",
     savedProfile: "Ma'lumotlaringiz saqlandi.",
+    registrationSuccess: "Siz muvaffaqiyatli ro'yxatdan o'tdingiz.",
+    congratulations: "Tabriklaymiz!",
     promoCodeAsk: "Promo kodni yuboring:",
     promoCodeSaved: "Promo kod qabul qilindi.",
     promoCodesEmpty: "Sizda hali promo kodlar yo'q.",
@@ -66,6 +70,8 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     invalidFullName: "Пожалуйста, введите имя и фамилию полностью.",
     invalidPhone: "Неверный номер телефона. Например: +998901234567",
     savedProfile: "Ваши данные сохранены.",
+    registrationSuccess: "Вы успешно зарегистрировались.",
+    congratulations: "Поздравляем!",
     promoCodeAsk: "Отправьте промокод:",
     promoCodeSaved: "Промокод принят.",
     promoCodesEmpty: "У вас пока нет промокодов.",

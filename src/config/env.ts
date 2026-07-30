@@ -30,6 +30,7 @@ export const env = {
   botToken: required("BOT_TOKEN"),
   nodeEnv: process.env.NODE_ENV ?? "development",
   addressStickerId: process.env.ADDRESS_STICKER_ID,
+  successStickerId: process.env.SUCCESS_STICKER_ID,
   database: {
     host: process.env.DB_HOST ?? "localhost",
     port: optionalNumber("DB_PORT", 5432),

@@ -11,8 +11,8 @@ export const buttons = {
     language: "🌐 Tilni o'zgartirish",
     terms: "📄 Promoaksiya shartlari",
     media: "📲 Media sahifalar",
-    languageUz: "O'zbekcha",
-    languageRu: "Русский",
+    languageUz: "🇺🇿 O'zbekcha",
+    languageRu: "🇷🇺 Русский",
     changeRegion: "⬅️ Viloyatni qayta tanlash",
     back: "Orqaga",
   },
@@ -23,18 +23,33 @@ export const buttons = {
     language: "🌐 Сменить язык",
     terms: "📄 Условия акции",
     media: "📲 Медиа страницы",
-    languageUz: "O'zbekcha",
-    languageRu: "Русский",
+    languageUz: "🇺🇿 O'zbekcha",
+    languageRu: "🇷🇺 Русский",
     changeRegion: "⬅️ Выбрать регион заново",
     back: "Назад",
   },
 } satisfies Record<LanguageCode, Record<string, string>>;
 
 export function phoneKeyboard(language: LanguageCode): Keyboard {
+  const b = buttons[language];
+
   return new Keyboard()
     .requestContact(t(language, "sendPhoneButton"))
+    .row()
+    .text(b.languageUz)
+    .text(b.languageRu)
     .resized()
     .oneTime();
+}
+
+export function languageKeyboard(language: LanguageCode): Keyboard {
+  const b = buttons[language];
+
+  return new Keyboard()
+    .text(b.languageUz)
+    .text(b.languageRu)
+    .resized()
+    .persistent();
 }
 
 export function regionInlineKeyboard(): InlineKeyboard {

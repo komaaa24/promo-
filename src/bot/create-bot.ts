@@ -4,6 +4,7 @@ import { env } from "../config/env";
 import { BotContext } from "./types";
 import { UserService } from "./user-service";
 import { registerHandlers } from "./handlers";
+import { logger } from "../logger";
 
 export function createBot(dataSource: DataSource): Bot<BotContext> {
   const bot = new Bot<BotContext>(env.botToken);
@@ -20,8 +21,17 @@ export function createBot(dataSource: DataSource): Bot<BotContext> {
 
   registerHandlers(bot, userService);
 
-  bot.catch((error) => {
-    console.error("Bot error", error);
+  bot.catch(async (error) => {
+    const ctx = error.ctx;
+
+    logger.error("Bot update failed", {
+      updateId: ctx.update.update_id,
+      chatId: ctx.chat?.id,
+      userId: ctx.from?.id,
+      error: error.error instanceof Error ? error.error.message : String(error.error),
+    });
+
+    await ctx.reply("Texnik xatolik yuz berdi. Iltimos, qayta urinib ko'ring.").catch(() => undefined);
   });
 
   return bot;
