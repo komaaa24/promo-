@@ -21,11 +21,15 @@ function extractPromoCodesFromXlsx(path: string): string[] {
     maxBuffer: 64 * 1024 * 1024,
   });
   const codes = new Set<string>();
-  const cellRegex = /<c r="B\d+"[^>]*>\s*<is>\s*<t>([^<]+)<\/t>\s*<\/is>\s*<\/c>/g;
+  const cellRegex = /<[^:>]*(?::)?c\b[^>]*\br="B\d+"[^>]*>([\s\S]*?)<\/[^:>]*(?::)?c>/g;
   let match: RegExpExecArray | null;
 
   while ((match = cellRegex.exec(worksheetXml))) {
-    const code = normalizePromoCode(match[1]);
+    const cellXml = match[1];
+    const valueMatch =
+      /<[^:>]*(?::)?t\b[^>]*>([^<]+)<\/[^:>]*(?::)?t>/.exec(cellXml) ??
+      /<[^:>]*(?::)?v\b[^>]*>([^<]+)<\/[^:>]*(?::)?v>/.exec(cellXml);
+    const code = valueMatch ? normalizePromoCode(valueMatch[1]) : null;
 
     if (code) {
       codes.add(code);
