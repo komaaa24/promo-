@@ -9,6 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "db:migrate": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
     "db:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
+    "promo:import": "tsx src/scripts/import-promo-codes.ts",
+    "promo:winners": "tsx src/scripts/mark-promo-winners.ts",
     "typeorm": "typeorm-ts-node-commonjs",
     "lint": "tsc --noEmit"
   },

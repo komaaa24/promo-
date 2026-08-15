@@ -31,6 +31,11 @@ export class UserService {
     return this.dataSource.getRepository(TelegramUser).save(user);
   }
 
+  async setPaynetDraftPhone(user: TelegramUser, phone: string | null): Promise<TelegramUser> {
+    user.paynetDraftPhone = phone;
+    return this.dataSource.getRepository(TelegramUser).save(user);
+  }
+
   async savePromoCode(user: TelegramUser, code: string): Promise<PromoCode> {
     const promoCodes = this.dataSource.getRepository(PromoCode);
     const promoCode = promoCodes.create({ user, code: code.trim().toUpperCase() });

@@ -18,6 +18,24 @@ type MessageKey =
   | "promoCodeAsk"
   | "promoCodeSaved"
   | "promoCodesEmpty"
+  | "promoCodeInvalid"
+  | "promoCodeNotFound"
+  | "promoCodeAlreadyUsed"
+  | "promoCodeInactive"
+  | "promoCodeWinner"
+  | "promoCodeNoPrize"
+  | "promoPayoutFailed"
+  | "promoPayoutNotConfigured"
+  | "promoPhoneMissing"
+  | "promoNotConfigured"
+  | "paynetAskPhone"
+  | "paynetAskAmount"
+  | "paynetInvalidAmount"
+  | "paynetAccepted"
+  | "paynetFailed"
+  | "paynetHistoryEmpty"
+  | "paynetHistoryTitle"
+  | "paynetNotConfigured"
   | "cabinet"
   | "languageMenu"
   | "terms"
@@ -47,6 +65,24 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     promoCodeAsk: "Promo kodni yuboring:",
     promoCodeSaved: "Promo kod qabul qilindi.",
     promoCodesEmpty: "Sizda hali promo kodlar yo'q.",
+    promoCodeInvalid: "Promo kod formati noto'g'ri. Masalan: ABCD-1234-EFGH-5678",
+    promoCodeNotFound: "Bu promo kod bazada topilmadi.",
+    promoCodeAlreadyUsed: "Bu promo kod avval ishlatilgan.",
+    promoCodeInactive: "Bu promo kod faol emas.",
+    promoCodeWinner: "Tabriklaymiz! Promo kod yutuqli.",
+    promoCodeNoPrize: "Promo kod haqiqiy, lekin bu kod uchun yutuq belgilanmagan.",
+    promoPayoutFailed: "Yutuq qabul qilindi, lekin to'lovni yuborishda xatolik bo'ldi. Operator tekshiradi.",
+    promoPayoutNotConfigured: "Bu kod yutuqli, lekin Paynet integratsiyasi hali sozlanmagan. Kod ishlatilgan deb belgilanmadi.",
+    promoPhoneMissing: "Bu kod yutuqli, lekin profilingizda telefon raqam yo'q. Kod ishlatilgan deb belgilanmadi.",
+    promoNotConfigured: "Promokod tizimi sozlanmagan.",
+    paynetAskPhone: "Paynet to'lov uchun telefon raqamni kiriting. Masalan: 901234567",
+    paynetAskAmount: "To'lov summasini so'mda kiriting:",
+    paynetInvalidAmount: "Summa noto'g'ri. Iltimos, ruxsat etilgan oraliqda butun son kiriting.",
+    paynetAccepted: "Paynet so'rovi qabul qilindi.",
+    paynetFailed: "Paynet so'rovini yuborib bo'lmadi. Iltimos, keyinroq urinib ko'ring.",
+    paynetHistoryEmpty: "Paynet to'lovlari hali yo'q.",
+    paynetHistoryTitle: "Oxirgi Paynet to'lovlari:",
+    paynetNotConfigured: "Paynet integratsiyasi sozlanmagan.",
     cabinet: "Kabinet",
     languageMenu: "Tilni tanlang:",
     terms: "📄 Promoaksiya shartlari hozircha tayyorlanmoqda.",
@@ -75,6 +111,24 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     promoCodeAsk: "Отправьте промокод:",
     promoCodeSaved: "Промокод принят.",
     promoCodesEmpty: "У вас пока нет промокодов.",
+    promoCodeInvalid: "Неверный формат промокода. Например: ABCD-1234-EFGH-5678",
+    promoCodeNotFound: "Этот промокод не найден в базе.",
+    promoCodeAlreadyUsed: "Этот промокод уже использован.",
+    promoCodeInactive: "Этот промокод не активен.",
+    promoCodeWinner: "Поздравляем! Промокод выигрышный.",
+    promoCodeNoPrize: "Промокод действительный, но приз для него не задан.",
+    promoPayoutFailed: "Приз принят, но при отправке платежа произошла ошибка. Оператор проверит.",
+    promoPayoutNotConfigured: "Этот промокод выигрышный, но Paynet интеграция еще не настроена. Код не был отмечен использованным.",
+    promoPhoneMissing: "Этот промокод выигрышный, но в профиле нет номера телефона. Код не был отмечен использованным.",
+    promoNotConfigured: "Система промокодов не настроена.",
+    paynetAskPhone: "Введите номер телефона для Paynet платежа. Например: 901234567",
+    paynetAskAmount: "Введите сумму платежа в сумах:",
+    paynetInvalidAmount: "Неверная сумма. Введите целое число в разрешенном диапазоне.",
+    paynetAccepted: "Paynet запрос принят.",
+    paynetFailed: "Не удалось отправить Paynet запрос. Попробуйте позже.",
+    paynetHistoryEmpty: "Paynet платежей пока нет.",
+    paynetHistoryTitle: "Последние Paynet платежи:",
+    paynetNotConfigured: "Paynet интеграция не настроена.",
     cabinet: "Кабинет",
     languageMenu: "Выберите язык:",
     terms: "📄 Условия акции пока готовятся.",

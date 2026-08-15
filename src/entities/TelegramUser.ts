@@ -8,6 +8,8 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 import { PromoCode } from "./PromoCode";
+import { PaynetTransaction } from "./PaynetTransaction";
+import { PromoCodeRedemption } from "./PromoCodeRedemption";
 
 export type LanguageCode = "uz" | "ru";
 
@@ -17,7 +19,9 @@ export type UserStep =
   | "ASK_REGION"
   | "ASK_DISTRICT"
   | "MENU"
-  | "ASK_PROMO_CODE";
+  | "ASK_PROMO_CODE"
+  | "ASK_PAYNET_PHONE"
+  | "ASK_PAYNET_AMOUNT";
 
 @Entity({ name: "telegram_users" })
 export class TelegramUser {
@@ -43,6 +47,9 @@ export class TelegramUser {
   @Column({ type: "varchar", length: 120, nullable: true })
   selectedRegion!: string | null;
 
+  @Column({ type: "varchar", length: 32, nullable: true })
+  paynetDraftPhone!: string | null;
+
   @Column({ type: "varchar", length: 32, default: "ASK_FULL_NAME" })
   step!: UserStep;
 
@@ -57,6 +64,12 @@ export class TelegramUser {
 
   @OneToMany(() => PromoCode, (promoCode) => promoCode.user)
   promoCodes!: PromoCode[];
+
+  @OneToMany(() => PaynetTransaction, (transaction) => transaction.user)
+  paynetTransactions!: PaynetTransaction[];
+
+  @OneToMany(() => PromoCodeRedemption, (redemption) => redemption.user)
+  promoCodeRedemptions!: PromoCodeRedemption[];
 
   @CreateDateColumn()
   createdAt!: Date;

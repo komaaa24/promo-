@@ -31,6 +31,21 @@ export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   addressStickerId: process.env.ADDRESS_STICKER_ID,
   successStickerId: process.env.SUCCESS_STICKER_ID,
+  httpPort: optionalNumber("HTTP_PORT", 3000),
+  publicBaseUrl: process.env.PUBLIC_BASE_URL,
+  digitalPay: {
+    baseUrl: process.env.DIGITAL_PAY_BASE_URL ?? "https://pay.adigital.uz",
+    token: process.env.DIGITAL_PAY_TOKEN,
+    username: process.env.DIGITAL_PAY_USERNAME,
+    password: process.env.DIGITAL_PAY_PASSWORD,
+    timeoutMs: optionalNumber("DIGITAL_PAY_TIMEOUT_MS", 15000),
+    minAmount: optionalNumber("PAYNET_MIN_AMOUNT", 1000),
+    maxAmount: optionalNumber("PAYNET_MAX_AMOUNT", 1000000),
+  },
+  promo: {
+    codeSecret: process.env.PROMO_CODE_SECRET,
+    defaultRewardAmount: optionalNumber("PROMO_DEFAULT_REWARD_AMOUNT", 0),
+  },
   database: {
     host: process.env.DB_HOST ?? "localhost",
     port: optionalNumber("DB_PORT", 5432),
