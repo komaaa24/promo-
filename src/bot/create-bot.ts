@@ -5,13 +5,11 @@ import { BotContext } from "./types";
 import { UserService } from "./user-service";
 import { registerHandlers } from "./handlers";
 import { logger } from "../logger";
-import { PaynetService } from "../payments/paynet-service";
 import { PromoCodeService } from "../promo/promo-code-service";
 
 export function createBot(dataSource: DataSource): Bot<BotContext> {
   const bot = new Bot<BotContext>(env.botToken);
   const userService = new UserService(dataSource);
-  const paynetService = new PaynetService(dataSource);
   const promoCodeService = new PromoCodeService(dataSource);
 
   bot.use(async (ctx, next) => {
@@ -23,7 +21,7 @@ export function createBot(dataSource: DataSource): Bot<BotContext> {
     await next();
   });
 
-  registerHandlers(bot, userService, paynetService, promoCodeService);
+  registerHandlers(bot, userService, promoCodeService);
 
   bot.catch(async (error) => {
     const ctx = error.ctx;

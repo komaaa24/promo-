@@ -14,8 +14,6 @@ import { LanguageCode } from "../entities/TelegramUser";
 import { UserService } from "./user-service";
 import { getDistrictByIndex, getRegion, getRegionByIndex, isDistrict, Region } from "./locations";
 import { env } from "../config/env";
-import { PaynetService } from "../payments/paynet-service";
-import { PaynetTransaction } from "../entities/PaynetTransaction";
 import { PromoCodeService } from "../promo/promo-code-service";
 import { PromoCodeRedemption } from "../entities/PromoCodeRedemption";
 
@@ -37,42 +35,8 @@ function normalizePhone(value: string): string | null {
   return null;
 }
 
-function normalizePaynetPhone(value: string): string | null {
-  const phone = normalizePhone(value);
-
-  if (!phone) {
-    return null;
-  }
-
-  return phone.replace(/^\+998/, "");
-}
-
-function parseAmount(value: string): number | null {
-  const amount = Number(value.replace(/\s/g, ""));
-
-  if (!Number.isInteger(amount) || amount < env.digitalPay.minAmount || amount > env.digitalPay.maxAmount) {
-    return null;
-  }
-
-  return amount;
-}
-
-function isPaynetConfigured(): boolean {
-  return Boolean(env.digitalPay.token && env.digitalPay.username && env.digitalPay.password);
-}
-
 function isPromoConfigured(): boolean {
   return Boolean(env.promo.codeSecret && env.promo.codeSecret.length >= 32);
-}
-
-function formatPaynetTransaction(transaction: PaynetTransaction, index: number): string {
-  const providerId = transaction.providerUuid ?? transaction.providerId ?? transaction.id.slice(0, 8);
-
-  return [
-    `${index + 1}. ${transaction.phone} - ${transaction.amount} so'm`,
-    `Status: ${transaction.status}`,
-    `ID: ${providerId}`,
-  ].join("\n");
 }
 
 function formatPromoRedemption(redemption: PromoCodeRedemption, index: number): string {
@@ -121,7 +85,7 @@ async function sendRegistrationSuccess(ctx: BotContext): Promise<void> {
   );
 }
 
-async function repeatCurrentStep(ctx: BotContext): Promise<void> {
+async function repeatCurrentStep(ctx: BotContext, userService: UserService): Promise<void> {
   const user = ctx.dbUser;
 
   if (user.step === "ASK_FULL_NAME") {
@@ -162,16 +126,11 @@ async function repeatCurrentStep(ctx: BotContext): Promise<void> {
     return;
   }
 
-  if (user.step === "ASK_PAYNET_PHONE") {
-    await ctx.reply(t(user.language, "paynetAskPhone"), {
-      reply_markup: languageKeyboard(user.language),
-    });
-    return;
-  }
-
-  if (user.step === "ASK_PAYNET_AMOUNT") {
-    await ctx.reply(t(user.language, "paynetAskAmount"), {
-      reply_markup: languageKeyboard(user.language),
+  if (user.step === "ASK_PAYNET_PHONE" || user.step === "ASK_PAYNET_AMOUNT") {
+    await userService.setPaynetDraftPhone(user, null);
+    await userService.setStep(user, "MENU");
+    await ctx.reply(t(user.language, "mainMenu"), {
+      reply_markup: mainMenuKeyboard(user.language),
     });
     return;
   }
@@ -184,7 +143,6 @@ async function repeatCurrentStep(ctx: BotContext): Promise<void> {
 export function registerHandlers(
   bot: Bot<BotContext>,
   userService: UserService,
-  paynetService: PaynetService,
   promoCodeService: PromoCodeService,
 ): void {
   bot.command("start", async (ctx) => {
@@ -222,37 +180,6 @@ export function registerHandlers(
     const list = codes.map(formatPromoRedemption).join("\n\n");
 
     await ctx.reply(list, { reply_markup: mainMenuKeyboard(ctx.dbUser.language) });
-  });
-
-  bot.hears([buttons.uz.paynetTopUp, buttons.ru.paynetTopUp], async (ctx) => {
-    if (!isPaynetConfigured()) {
-      await ctx.reply(t(ctx.dbUser.language, "paynetNotConfigured"), {
-        reply_markup: mainMenuKeyboard(ctx.dbUser.language),
-      });
-      return;
-    }
-
-    await userService.setPaynetDraftPhone(ctx.dbUser, null);
-    await userService.setStep(ctx.dbUser, "ASK_PAYNET_PHONE");
-    await ctx.reply(t(ctx.dbUser.language, "paynetAskPhone"), {
-      reply_markup: phoneKeyboard(ctx.dbUser.language),
-    });
-  });
-
-  bot.hears([buttons.uz.paynetHistory, buttons.ru.paynetHistory], async (ctx) => {
-    const transactions = await paynetService.listForUser(ctx.dbUser);
-
-    if (transactions.length === 0) {
-      await ctx.reply(t(ctx.dbUser.language, "paynetHistoryEmpty"), {
-        reply_markup: mainMenuKeyboard(ctx.dbUser.language),
-      });
-      return;
-    }
-
-    await ctx.reply(
-      [t(ctx.dbUser.language, "paynetHistoryTitle"), "", ...transactions.map(formatPaynetTransaction)].join("\n\n"),
-      { reply_markup: mainMenuKeyboard(ctx.dbUser.language) },
-    );
   });
 
   bot.hears([buttons.uz.cabinet, buttons.ru.cabinet], async (ctx) => {
@@ -293,7 +220,7 @@ export function registerHandlers(
     await ctx.reply(t("uz", "languageChanged"), {
       reply_markup: languageKeyboard("uz"),
     });
-    await repeatCurrentStep(ctx);
+    await repeatCurrentStep(ctx, userService);
   });
 
   bot.hears([buttons.uz.languageRu, buttons.ru.languageRu], async (ctx) => {
@@ -302,7 +229,7 @@ export function registerHandlers(
     await ctx.reply(t("ru", "languageChanged"), {
       reply_markup: languageKeyboard("ru"),
     });
-    await repeatCurrentStep(ctx);
+    await repeatCurrentStep(ctx, userService);
   });
 
   bot.hears([buttons.uz.changeRegion, buttons.ru.changeRegion], async (ctx) => {
@@ -375,24 +302,6 @@ export function registerHandlers(
       user.step = "ASK_REGION";
       await userService.setStep(user, "ASK_REGION");
       await askRegion(ctx);
-      return;
-    }
-
-    if (ctx.message.contact && user.step === "ASK_PAYNET_PHONE") {
-      const phone = normalizePaynetPhone(ctx.message.contact.phone_number);
-
-      if (!phone) {
-        await ctx.reply(t(user.language, "invalidPhone"), {
-          reply_markup: phoneKeyboard(user.language),
-        });
-        return;
-      }
-
-      await userService.setPaynetDraftPhone(user, phone);
-      await userService.setStep(user, "ASK_PAYNET_AMOUNT");
-      await ctx.reply(t(user.language, "paynetAskAmount"), {
-        reply_markup: languageKeyboard(user.language),
-      });
       return;
     }
 
@@ -550,59 +459,6 @@ export function registerHandlers(
       await ctx.reply(message, {
         reply_markup: mainMenuKeyboard(user.language),
       });
-      return;
-    }
-
-    if (user.step === "ASK_PAYNET_PHONE") {
-      const phone = normalizePaynetPhone(text);
-
-      if (!phone) {
-        await ctx.reply(t(user.language, "invalidPhone"), {
-          reply_markup: phoneKeyboard(user.language),
-        });
-        return;
-      }
-
-      await userService.setPaynetDraftPhone(user, phone);
-      await userService.setStep(user, "ASK_PAYNET_AMOUNT");
-      await ctx.reply(t(user.language, "paynetAskAmount"), {
-        reply_markup: languageKeyboard(user.language),
-      });
-      return;
-    }
-
-    if (user.step === "ASK_PAYNET_AMOUNT") {
-      const amount = parseAmount(text);
-
-      if (!amount || !user.paynetDraftPhone) {
-        await ctx.reply(t(user.language, "paynetInvalidAmount"));
-        return;
-      }
-
-      const transaction = await paynetService.create(user, user.paynetDraftPhone, amount);
-      await userService.setPaynetDraftPhone(user, null);
-      await userService.setStep(user, "MENU");
-
-      if (transaction.status === "failed") {
-        await ctx.reply(`${t(user.language, "paynetFailed")}\n\n${t(user.language, "mainMenu")}`, {
-          reply_markup: mainMenuKeyboard(user.language),
-        });
-        return;
-      }
-
-      await ctx.reply(
-        [
-          t(user.language, "paynetAccepted"),
-          "",
-          `Telefon: ${transaction.phone}`,
-          `Summa: ${transaction.amount} so'm`,
-          `Status: ${transaction.status}`,
-          `ID: ${transaction.providerUuid ?? transaction.providerId ?? transaction.id}`,
-          "",
-          t(user.language, "mainMenu"),
-        ].join("\n"),
-        { reply_markup: mainMenuKeyboard(user.language) },
-      );
       return;
     }
 

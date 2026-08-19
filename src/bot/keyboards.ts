@@ -7,8 +7,6 @@ export const buttons = {
   uz: {
     promoSend: "🎁 Promokod yuborish",
     promoMine: "🛍 Mening promokodlarim",
-    paynetTopUp: "📱 Paynet to'lov",
-    paynetHistory: "🧾 Paynet tarixi",
     cabinet: "👤 Shaxsiy Kabinet",
     language: "🌐 Tilni o'zgartirish",
     terms: "📄 Promoaksiya shartlari",
@@ -21,8 +19,6 @@ export const buttons = {
   ru: {
     promoSend: "🎁 Отправить промокод",
     promoMine: "🛍 Мои промокоды",
-    paynetTopUp: "📱 Paynet платеж",
-    paynetHistory: "🧾 История Paynet",
     cabinet: "👤 Личный кабинет",
     language: "🌐 Сменить язык",
     terms: "📄 Условия акции",
@@ -82,10 +78,7 @@ export function mainMenuKeyboard(language: LanguageCode): Keyboard {
 
   return new Keyboard()
     .text(b.promoSend)
-    .text(b.paynetTopUp)
-    .row()
     .text(b.promoMine)
-    .text(b.paynetHistory)
     .row()
     .text(b.cabinet)
     .text(b.language)

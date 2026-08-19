@@ -28,14 +28,7 @@ type MessageKey =
   | "promoPayoutNotConfigured"
   | "promoPhoneMissing"
   | "promoNotConfigured"
-  | "paynetAskPhone"
-  | "paynetAskAmount"
-  | "paynetInvalidAmount"
   | "paynetAccepted"
-  | "paynetFailed"
-  | "paynetHistoryEmpty"
-  | "paynetHistoryTitle"
-  | "paynetNotConfigured"
   | "cabinet"
   | "languageMenu"
   | "terms"
@@ -75,14 +68,7 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     promoPayoutNotConfigured: "Bu kod yutuqli, lekin Paynet integratsiyasi hali sozlanmagan. Kod ishlatilgan deb belgilanmadi.",
     promoPhoneMissing: "Bu kod yutuqli, lekin profilingizda telefon raqam yo'q. Kod ishlatilgan deb belgilanmadi.",
     promoNotConfigured: "Promokod tizimi sozlanmagan.",
-    paynetAskPhone: "Paynet to'lov uchun telefon raqamni kiriting. Masalan: 901234567",
-    paynetAskAmount: "To'lov summasini so'mda kiriting:",
-    paynetInvalidAmount: "Summa noto'g'ri. Iltimos, ruxsat etilgan oraliqda butun son kiriting.",
-    paynetAccepted: "Paynet so'rovi qabul qilindi.",
-    paynetFailed: "Paynet so'rovini yuborib bo'lmadi. Iltimos, keyinroq urinib ko'ring.",
-    paynetHistoryEmpty: "Paynet to'lovlari hali yo'q.",
-    paynetHistoryTitle: "Oxirgi Paynet to'lovlari:",
-    paynetNotConfigured: "Paynet integratsiyasi sozlanmagan.",
+    paynetAccepted: "Yutuq summasi telefon balansingizga yuborildi.",
     cabinet: "Kabinet",
     languageMenu: "Tilni tanlang:",
     terms: "📄 Promoaksiya shartlari hozircha tayyorlanmoqda.",
@@ -121,14 +107,7 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     promoPayoutNotConfigured: "Этот промокод выигрышный, но Paynet интеграция еще не настроена. Код не был отмечен использованным.",
     promoPhoneMissing: "Этот промокод выигрышный, но в профиле нет номера телефона. Код не был отмечен использованным.",
     promoNotConfigured: "Система промокодов не настроена.",
-    paynetAskPhone: "Введите номер телефона для Paynet платежа. Например: 901234567",
-    paynetAskAmount: "Введите сумму платежа в сумах:",
-    paynetInvalidAmount: "Неверная сумма. Введите целое число в разрешенном диапазоне.",
-    paynetAccepted: "Paynet запрос принят.",
-    paynetFailed: "Не удалось отправить Paynet запрос. Попробуйте позже.",
-    paynetHistoryEmpty: "Paynet платежей пока нет.",
-    paynetHistoryTitle: "Последние Paynet платежи:",
-    paynetNotConfigured: "Paynet интеграция не настроена.",
+    paynetAccepted: "Сумма выигрыша отправлена на баланс телефона.",
     cabinet: "Кабинет",
     languageMenu: "Выберите язык:",
     terms: "📄 Условия акции пока готовятся.",

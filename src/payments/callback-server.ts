@@ -5,6 +5,7 @@ import { env } from "../config/env";
 import { logger } from "../logger";
 import { BotContext } from "../bot/types";
 import { PaynetService } from "./paynet-service";
+import { handleAdminRequest } from "../admin/admin-server";
 
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -36,6 +37,10 @@ export function startCallbackServer(dataSource: DataSource, bot: Bot<BotContext>
   const paynetService = new PaynetService(dataSource);
 
   const server = createServer(async (req, res) => {
+    if (await handleAdminRequest(req, res, dataSource)) {
+      return;
+    }
+
     if (req.method === "GET" && req.url === "/health") {
       sendJson(res, 200, { ok: true });
       return;

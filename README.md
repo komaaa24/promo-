@@ -16,9 +16,9 @@ npm run dev
 `ADDRESS_STICKER_ID` ixtiyoriy: berilsa, bot manzil tanlash qadamida sticker yuboradi.
 `SUCCESS_STICKER_ID` ixtiyoriy: berilsa, ro'yxatdan o'tish yakunida galochka sticker yuboradi.
 
-## Paynet / Digital Pay
+## Promo Payout / Digital Pay
 
-Bot Digital Pay API orqali telefon raqamga Paynet to'lov yaratadi:
+Bot Digital Pay API orqali faqat yutuqli promokod uchun foydalanuvchi telefon raqamiga Paynet payout yaratadi. Foydalanuvchi menyudan mustaqil Paynet to'lov qila olmaydi.
 
 ```env
 DIGITAL_PAY_BASE_URL=https://pay.adigital.uz
@@ -39,6 +39,29 @@ https://your-domain.uz/callbacks/digital-pay
 ```
 
 Digital Pay hujjatlariga ko'ra barcha so'rovlar `Basic Auth` va JSON body ichidagi `token` bilan yuboriladi. Telefon providerga 9 xonali lokal formatda yuboriladi, masalan `901234567`.
+
+## Admin Panel
+
+Admin panel `HTTP_PORT` dagi serverda ishlaydi:
+
+```text
+https://your-domain.uz/admin
+```
+
+IP bilan testda:
+
+```text
+http://161.35.219.212:3000/admin
+```
+
+`.env` ichida admin login/parolni albatta kuchli qilib qo'ying:
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=strong-random-password
+```
+
+Panelda umumiy statistika, Paynet statuslari, promokod ishlatishlar, oxirgi to'lovlar va failed payoutlarni qayta yuborish tugmasi bor. `ADMIN_USERNAME` yoki `ADMIN_PASSWORD` bo'lmasa admin panel o'chirilgan bo'ladi.
 
 ## Promokodlar
 
@@ -61,6 +84,18 @@ Alohida kodlarni yutuqli qilish:
 
 ```bash
 npm run promo:winners -- 1000 4S46-37DL-VWGV-OE65 RQ0V-CFG7-2PAP-0FLF
+```
+
+Operatsion statistika:
+
+```bash
+npm run promo:stats
+```
+
+Failed Paynet payoutlarni qayta yuborish:
+
+```bash
+npm run paynet:retry-failed -- 20
 ```
 
 ## Production Deploy
@@ -93,6 +128,14 @@ pm2 restart promo-bot
 
 Productionda TypeORM `synchronize` o'chirilgan. Jadvallar faqat migration orqali boshqariladi.
 
+Productionda tavsiya:
+
+- `.env` faylini gitga qo'shmang.
+- Telegram, Digital Pay, Postgres va server root parollarini alohida saqlang.
+- `DIGITAL_PAY_TIMEOUT_MS=15000` yoki undan yuqori qiling.
+- Kunlik Postgres backup qo'ying.
+- `pm2 logs promo-bot` va `/admin` panelni muntazam tekshiring.
+
 ## Flow
 
 1. `/start`
@@ -101,4 +144,4 @@ Productionda TypeORM `synchronize` o'chirilgan. Jadvallar faqat migration orqali
 4. Yashash manzili
 5. Asosiy menyu
 
-Menyuda promo kod yuborish, Paynet to'lov, Paynet tarixi, promo kodlar ro'yxati, kabinet/til o'zgartirish, oferta/media sahifalari bor.
+Menyuda promo kod yuborish, promo kodlar ro'yxati, kabinet/til o'zgartirish, oferta/media sahifalari bor. Paynet payout faqat yutuqli promokod ishlatilganda ichki jarayon sifatida bajariladi.

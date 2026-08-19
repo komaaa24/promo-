@@ -11,6 +11,8 @@
     "db:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "promo:import": "tsx src/scripts/import-promo-codes.ts",
     "promo:winners": "tsx src/scripts/mark-promo-winners.ts",
+    "promo:stats": "tsx src/scripts/promo-stats.ts",
+    "paynet:retry-failed": "tsx src/scripts/retry-failed-payouts.ts",
     "typeorm": "typeorm-ts-node-commonjs",
     "lint": "tsc --noEmit"
   },
