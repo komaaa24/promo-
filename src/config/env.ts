@@ -34,8 +34,8 @@ export const env = {
   httpPort: optionalNumber("HTTP_PORT", 3000),
   publicBaseUrl: process.env.PUBLIC_BASE_URL,
   admin: {
-    username: process.env.ADMIN_USERNAME,
-    password: process.env.ADMIN_PASSWORD,
+    username: process.env.DASH_LOGIN ?? process.env.ADMIN_USERNAME,
+    password: process.env.DASH_PASS ?? process.env.ADMIN_PASSWORD,
   },
   digitalPay: {
     baseUrl: process.env.DIGITAL_PAY_BASE_URL ?? "https://pay.adigital.uz",

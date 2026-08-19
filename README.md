@@ -42,26 +42,26 @@ Digital Pay hujjatlariga ko'ra barcha so'rovlar `Basic Auth` va JSON body ichida
 
 ## Admin Panel
 
-Admin panel `HTTP_PORT` dagi serverda ishlaydi:
+Dashboard `HTTP_PORT` dagi serverda ishlaydi:
 
 ```text
-https://your-domain.uz/admin
+https://your-domain.uz/dashboard
 ```
 
 IP bilan testda:
 
 ```text
-http://161.35.219.212:3000/admin
+http://161.35.219.212:3000/dashboard
 ```
 
 `.env` ichida admin login/parolni albatta kuchli qilib qo'ying:
 
 ```env
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=strong-random-password
+DASH_LOGIN=admin
+DASH_PASS=strong-random-password
 ```
 
-Panelda umumiy statistika, Paynet statuslari, promokod ishlatishlar, oxirgi to'lovlar va failed payoutlarni qayta yuborish tugmasi bor. `ADMIN_USERNAME` yoki `ADMIN_PASSWORD` bo'lmasa admin panel o'chirilgan bo'ladi.
+Panelda umumiy statistika, dinamik chartlar, ishtirokchilar, promokodlar, hududlar, Paynet statuslari, app loglari, CSV eksport va failed payoutlarni qayta yuborish bor. `DASH_LOGIN` yoki `DASH_PASS` bo'lmasa dashboard o'chirilgan bo'ladi.
 
 ## Promokodlar
 
@@ -134,7 +134,7 @@ Productionda tavsiya:
 - Telegram, Digital Pay, Postgres va server root parollarini alohida saqlang.
 - `DIGITAL_PAY_TIMEOUT_MS=15000` yoki undan yuqori qiling.
 - Kunlik Postgres backup qo'ying.
-- `pm2 logs promo-bot` va `/admin` panelni muntazam tekshiring.
+- `pm2 logs promo-bot` va `/dashboard` panelni muntazam tekshiring.
 
 ## Flow
 
