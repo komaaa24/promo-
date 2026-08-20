@@ -194,6 +194,46 @@ function sendCsv(res: ServerResponse, filename: string, rows: Array<Record<strin
   res.end(body);
 }
 
+function appendPromoCodeSearch(clauses: string[], params: QueryParam[], q: string | null): void {
+  const text = q?.trim();
+  if (!text) {
+    return;
+  }
+
+  const compact = text.replace(/[^a-zA-Z0-9]/g, "");
+  const digits = text.replace(/\D/g, "");
+  const parts: string[] = [];
+
+  params.push(`%${text}%`);
+  const textIndex = params.length;
+  parts.push(
+    `u."fullName" ILIKE $${textIndex}`,
+    `u."phone" ILIKE $${textIndex}`,
+    `u."telegramId"::text ILIKE $${textIndex}`,
+    `c."id"::text ILIKE $${textIndex}`,
+    `r."id"::text ILIKE $${textIndex}`,
+    `p."id"::text ILIKE $${textIndex}`,
+    `p."providerId"::text ILIKE $${textIndex}`,
+    `p."providerUuid"::text ILIKE $${textIndex}`,
+  );
+
+  if (compact) {
+    params.push(`%${compact.slice(-8)}%`);
+    parts.push(`c."codeSuffix" ILIKE $${params.length}`);
+  }
+
+  if (digits) {
+    params.push(`%${digits}%`);
+    const digitsIndex = params.length;
+    parts.push(
+      `u."telegramId"::text ILIKE $${digitsIndex}`,
+      `regexp_replace(COALESCE(u."phone", ''), '\\D', '', 'g') LIKE $${digitsIndex}`,
+    );
+  }
+
+  clauses.push(`(${parts.join(" OR ")})`);
+}
+
 async function getOverview(dataSource: DataSource, url: URL): Promise<Record<string, unknown>> {
   const filters = buildFilters(url, { dateColumn: 'u."createdAt"', regionColumn: 'u."address"' });
   const redemptionFilters = buildFilters(url, { dateColumn: 'r."createdAt"', regionColumn: 'u."address"' });
@@ -250,21 +290,31 @@ async function getOverview(dataSource: DataSource, url: URL): Promise<Record<str
     SELECT bucket, COUNT(*)::int AS "users"
     FROM (
       SELECT
-        u."id",
+        counted."id",
         CASE
-          WHEN COUNT(r."id") = 0 THEN '0'
-          WHEN COUNT(r."id") = 1 THEN '1'
-          WHEN COUNT(r."id") = 2 THEN '2'
-          WHEN COUNT(r."id") BETWEEN 3 AND 5 THEN '3-5'
-          WHEN COUNT(r."id") BETWEEN 6 AND 10 THEN '6-10'
-          ELSE '10+'
+          WHEN counted."codesUsed" = 1 THEN '1'
+          WHEN counted."codesUsed" = 2 THEN '2'
+          WHEN counted."codesUsed" BETWEEN 3 AND 5 THEN '3-5'
+          WHEN counted."codesUsed" BETWEEN 6 AND 10 THEN '6-10'
+          WHEN counted."codesUsed" BETWEEN 11 AND 50 THEN '11-50'
+          ELSE '50+'
         END AS bucket
-      FROM "telegram_users" u
-      LEFT JOIN "promo_code_redemptions" r ON r."userId" = u."id"
-      GROUP BY u."id"
+      FROM (
+        SELECT u."id", COUNT(r."id")::int AS "codesUsed"
+        FROM "telegram_users" u
+        JOIN "promo_code_redemptions" r ON r."userId" = u."id"
+        GROUP BY u."id"
+      ) counted
     ) buckets
     GROUP BY bucket
-    ORDER BY bucket
+    ORDER BY CASE bucket
+      WHEN '1' THEN 1
+      WHEN '2' THEN 2
+      WHEN '3-5' THEN 3
+      WHEN '6-10' THEN 4
+      WHEN '11-50' THEN 5
+      ELSE 6
+    END
   `);
 
   return { summary, dailyRedemptions, dailyUsers, regionStats, codeBuckets, serverTime: new Date().toISOString() };
@@ -405,10 +455,7 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
   const mode = url.searchParams.get("mode") ?? "used";
   const effectiveMode = status === "available" || status === "blocked" ? "all" : mode;
 
-  if (q) {
-    params.push(`%${q.replace(/-/g, "").slice(-8)}%`, `%${q}%`);
-    clauses.push(`(c."codeSuffix" ILIKE $${params.length - 1} OR u."fullName" ILIKE $${params.length} OR u."phone" ILIKE $${params.length} OR u."telegramId"::text ILIKE $${params.length})`);
-  }
+  appendPromoCodeSearch(clauses, params, q);
 
   if (effectiveMode === "used") {
     clauses.push(`c."redeemedAt" IS NOT NULL`);
@@ -436,9 +483,11 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
   `);
   const [countRow] = await dataSource.query(
     `
-      SELECT COUNT(*)::int AS total
+      SELECT COUNT(DISTINCT c."id")::int AS total
       FROM "promo_code_catalog" c
-      LEFT JOIN "telegram_users" u ON u."id" = c."redeemedByUserId"
+      LEFT JOIN "promo_code_redemptions" r ON r."promoCodeId" = c."id"
+      LEFT JOIN "telegram_users" u ON u."id" = COALESCE(c."redeemedByUserId", r."userId")
+      LEFT JOIN "paynet_transactions" p ON p."promoCodeRedemptionId" = r."id"
       ${where}
     `,
     params,
@@ -464,8 +513,8 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
         p."providerId",
         p."providerUuid"
       FROM "promo_code_catalog" c
-      LEFT JOIN "telegram_users" u ON u."id" = c."redeemedByUserId"
       LEFT JOIN "promo_code_redemptions" r ON r."promoCodeId" = c."id"
+      LEFT JOIN "telegram_users" u ON u."id" = COALESCE(c."redeemedByUserId", r."userId")
       LEFT JOIN "paynet_transactions" p ON p."promoCodeRedemptionId" = r."id"
       ${where}
       ORDER BY c."updatedAt" DESC
@@ -626,10 +675,7 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
   const mode = url.searchParams.get("mode") ?? "used";
   const effectiveMode = status === "available" || status === "blocked" ? "all" : mode;
 
-  if (q) {
-    params.push(`%${q.replace(/-/g, "").slice(-8)}%`, `%${q}%`);
-    clauses.push(`(c."codeSuffix" ILIKE $${params.length - 1} OR u."fullName" ILIKE $${params.length} OR u."phone" ILIKE $${params.length} OR u."telegramId"::text ILIKE $${params.length})`);
-  }
+  appendPromoCodeSearch(clauses, params, q);
   if (region) {
     params.push(`%${region}%`);
     clauses.push(`u."address" ILIKE $${params.length}`);
@@ -674,8 +720,8 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
         p."providerId" AS "paynet_provider_id",
         r."errorMessage" AS "xato"
       FROM "promo_code_catalog" c
-      LEFT JOIN "telegram_users" u ON u."id" = c."redeemedByUserId"
       LEFT JOIN "promo_code_redemptions" r ON r."promoCodeId" = c."id"
+      LEFT JOIN "telegram_users" u ON u."id" = COALESCE(c."redeemedByUserId", r."userId")
       LEFT JOIN "paynet_transactions" p ON p."promoCodeRedemptionId" = r."id"
       ${where}
       ORDER BY c."updatedAt" DESC
@@ -715,25 +761,27 @@ function dashboardHtml(): string {
   </style></head><body><div class="app"><aside><div class="brand">Promo</div><div class="sub">BOSHQARUV PANELI</div><nav>
   <button class="active" data-view="participants">Ishtirokchilar</button><button data-view="codes">Kiritilgan promokodlar</button><button data-view="regions">Hududlar</button><button data-view="payments">Paynet</button><button data-view="export">Eksport</button>
   </nav><div class="user"><div class="avatar">A</div><div><b>Admin</b><div class="muted">Boshqaruvchi</div></div></div></aside><section><header><div class="title" id="pageTitle">Ishtirokchilar</div><div class="status"><span><i class="dot"></i> Jonli <b id="clock"></b></span><span>Yangilandi: <b id="updated">-</b></span><button class="btn ghost" onclick="logout()">Chiqish</button></div></header><main>
-  <div class="filters"><div><label>QIDIRISH</label><input id="q" placeholder="Ism, telefon yoki user ID"/></div><div><label>HUDUD</label><input id="region" placeholder="Barcha hududlar"/></div><div><label>SANADAN</label><input id="from" type="date"/></div><div><label>SANAGACHA</label><input id="to" type="date"/></div><div class="actions"><button class="btn" onclick="load()">Qo'llash</button><button class="btn secondary" onclick="clearFilters()">Tozalash</button></div></div>
+  <div class="filters"><div id="searchFilter" class="hidden"><label>QIDIRISH</label><input id="q" placeholder="Ism, telefon, user ID yoki promokod"/></div><div><label>HUDUD</label><select id="region"><option value="">Barcha hududlar</option><option>Andijon viloyati</option><option>Buxoro viloyati</option><option>Farg'ona viloyati</option><option>Jizzax viloyati</option><option>Xorazm viloyati</option><option>Namangan viloyati</option><option>Navoiy viloyati</option><option>Qashqadaryo viloyati</option><option>Samarqand viloyati</option><option>Sirdaryo viloyati</option><option>Surxondaryo viloyati</option><option>Toshkent viloyati</option><option>Toshkent shahri</option><option>Qoraqalpog'iston</option></select></div><div><label>SANADAN</label><input id="from" type="date"/></div><div><label>SANAGACHA</label><input id="to" type="date"/></div><div class="actions"><button class="btn" onclick="load()">Qo'llash</button><button class="btn secondary" onclick="clearFilters()">Tozalash</button></div></div>
   <div id="overview" class="view hidden"></div><div id="participants" class="view"></div><div id="codes" class="view hidden"></div><div id="regions" class="view hidden"></div><div id="payments" class="view hidden"></div><div id="export" class="view hidden"></div>
   </main></section></div><div id="modal" class="modal hidden"></div><script>
   const el=id=>document.getElementById(id);
   let current='participants'; const titles={overview:'Boshqaruv paneli',participants:'Ishtirokchilar',codes:'Kiritilgan promokodlar',regions:'Hududlar',payments:'Paynet nazorati',export:'Eksport'};
-  let codeFilter=''; let codesMode='used'; let codesStatus=''; const fmt=n=>Number(n||0).toLocaleString('ru-RU'); const esc=v=>String(v??'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); const qs=()=>new URLSearchParams({q:el('q').value,region:el('region').value,from:el('from').value,to:el('to').value}).toString();
+  let codeFilter=''; let codesMode='used'; let codesStatus=''; const fmt=n=>Number(n||0).toLocaleString('ru-RU'); const kpi=v=>typeof v==='string'?v:fmt(v); const esc=v=>String(v??'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); const qs=(withSearch=true)=>{const p=new URLSearchParams({region:el('region').value,from:el('from').value,to:el('to').value}); if(withSearch)p.set('q',el('q').value); return p.toString()};
   async function api(path,opt){const r=await fetch(path,opt); if(r.status===401) location='/dashboard/login'; if(!r.ok) throw new Error(await r.text()); return r.json()}
-  function setView(v){current=v; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v)); document.querySelectorAll('.view').forEach(e=>e.classList.add('hidden')); el(v).classList.remove('hidden'); el('pageTitle').textContent=titles[v]; load()}
+  function syncFilters(){el('searchFilter').classList.toggle('hidden',current==='participants')} function setView(v){current=v; syncFilters(); document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v)); document.querySelectorAll('.view').forEach(e=>e.classList.add('hidden')); el(v).classList.remove('hidden'); el('pageTitle').textContent=titles[v]; load()}
   document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>setView(b.dataset.view)); function clearFilters(){el('q').value='';el('region').value='';el('from').value='';el('to').value='';load()} function logout(){fetch('/dashboard/logout',{method:'POST'}).then(()=>location='/dashboard/login')}
   function table(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; const keys=Object.keys(rows[0]); return '<table><thead><tr>'+keys.map(k=>'<th>'+esc(k)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(r[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}
   function date(v){return v?new Date(v).toLocaleString('ru-RU'):''}
-  function lineChart(id,rows,color){setTimeout(()=>{const c=document.getElementById(id),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=c.clientHeight*2,m=36,max=Math.max(1,...rows.map(r=>Number(r.count))); x.clearRect(0,0,w,h); x.strokeStyle='#d8dde5'; x.lineWidth=1; for(let i=0;i<5;i++){let y=m+(h-2*m)*i/4; x.beginPath(); x.moveTo(m,y); x.lineTo(w-m,y); x.stroke()} x.strokeStyle=color; x.fillStyle=color+'22'; x.lineWidth=4; x.beginPath(); rows.forEach((r,i)=>{let px=m+(w-2*m)*i/Math.max(rows.length-1,1),py=h-m-(h-2*m)*Number(r.count)/max; i?x.lineTo(px,py):x.moveTo(px,py)}); x.stroke();},30)}
-  function barChart(id,rows,color,labelKey='bucket',valueKey='users'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=c.clientHeight*2,m=48,max=Math.max(1,...rows.map(r=>Number(r[valueKey]))); x.clearRect(0,0,w,h); x.strokeStyle='#d8dde5'; for(let i=0;i<5;i++){let y=m+(h-2*m)*i/4; x.beginPath(); x.moveTo(m,y); x.lineTo(w-m,y); x.stroke()} const bw=(w-2*m)/Math.max(rows.length,1)*.72; rows.forEach((r,i)=>{let v=Number(r[valueKey]),bh=(h-2*m)*v/max,px=m+(w-2*m)*i/rows.length+bw*.2,py=h-m-bh; x.fillStyle=color; x.fillRect(px,py,bw,bh); x.fillStyle='#555'; x.font='22px Arial'; x.textAlign='center'; x.fillText(String(r[labelKey]),px+bw/2,h-m+30)});},30)}
-  function horizontalChart(id,rows,color,labelKey='region',valueKey='redemptions'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=c.clientHeight*2,m=52,l=220,max=Math.max(1,...rows.map(r=>Number(r[valueKey]))); x.clearRect(0,0,w,h); x.font='20px Arial'; rows.slice(0,14).forEach((r,i)=>{let y=m+i*((h-2*m)/14),v=Number(r[valueKey]),bw=(w-l-m)*v/max; x.fillStyle='#60656f'; x.textAlign='right'; x.fillText(String(r[labelKey]).slice(0,22),l-16,y+16); x.fillStyle=color; x.fillRect(l,y,bw,24); x.fillStyle='#3159c9'; x.textAlign='left'; x.font='bold 20px Arial'; x.fillText(fmt(v),l+bw+10,y+18); x.font='20px Arial'});},30)}
+  function emptyChart(x,w,h){x.fillStyle='#6b7280';x.font='24px Arial';x.textAlign='center';x.fillText('Malumot yoq',w/2,h/2)}
+  function drawGrid(x,w,h,l,t,r,b,max){x.strokeStyle='#e2e6ec';x.lineWidth=1;x.fillStyle='#60656f';x.font='20px Arial';x.textAlign='right';for(let i=0;i<=4;i++){let y=t+(h-t-b)*i/4,val=Math.round(max-(max*i/4));x.beginPath();x.moveTo(l,y);x.lineTo(w-r,y);x.stroke();x.fillText(String(val),l-10,y+7)}}
+  function lineChart(id,rows,color){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),ratio=window.devicePixelRatio||1,w=c.width=c.clientWidth*ratio,h=c.height=c.clientHeight*ratio,l=72,t=36,r=26,b=54,data=rows.map(v=>({date:v.date,count:Number(v.count||0)})),max=Math.max(1,...data.map(v=>v.count));x.clearRect(0,0,w,h);if(!data.length){emptyChart(x,w,h);return}drawGrid(x,w,h,l,t,r,b,max);const points=data.map((v,i)=>({x:l+(w-l-r)*i/Math.max(data.length-1,1),y:h-b-(h-t-b)*v.count/max,v}));x.beginPath();points.forEach((p,i)=>i?x.lineTo(p.x,p.y):x.moveTo(p.x,p.y));x.lineTo(points[points.length-1].x,h-b);x.lineTo(points[0].x,h-b);x.closePath();x.fillStyle=color+'22';x.fill();x.beginPath();points.forEach((p,i)=>i?x.lineTo(p.x,p.y):x.moveTo(p.x,p.y));x.strokeStyle=color;x.lineWidth=4;x.stroke();points.filter(p=>p.v.count>0).slice(-8).forEach(p=>{x.fillStyle=color;x.beginPath();x.arc(p.x,p.y,5,0,Math.PI*2);x.fill()});x.fillStyle='#60656f';x.font='19px Arial';x.textAlign='center';[0,Math.floor((data.length-1)/2),data.length-1].forEach(i=>{const p=points[i]; if(p)x.fillText(p.v.date.slice(5),p.x,h-18)});},30)}
+  function barChart(id,rows,color,labelKey='bucket',valueKey='users'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),ratio=window.devicePixelRatio||1,w=c.width=c.clientWidth*ratio,h=c.height=c.clientHeight*ratio,l=72,t=36,r=26,b=64,data=rows.map(v=>({label:String(v[labelKey]),value:Number(v[valueKey]||0)})),max=Math.max(1,...data.map(v=>v.value));x.clearRect(0,0,w,h);if(!data.length){emptyChart(x,w,h);return}drawGrid(x,w,h,l,t,r,b,max);const slot=(w-l-r)/Math.max(data.length,1),bw=Math.min(slot*.68,160);data.forEach((v,i)=>{let bh=(h-t-b)*v.value/max,px=l+slot*i+(slot-bw)/2,py=h-b-bh;x.fillStyle=color;x.beginPath();x.roundRect(px,py,bw,bh,10);x.fill();x.fillStyle='#3159c9';x.font='bold 20px Arial';x.textAlign='center';if(v.value>0)x.fillText(fmt(v.value),px+bw/2,py-10);x.fillStyle='#60656f';x.font='20px Arial';x.fillText(v.label,px+bw/2,h-22)});},30)}
+  function horizontalChart(id,rows,color,labelKey='region',valueKey='redemptions'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),ratio=window.devicePixelRatio||1,w=c.width=c.clientWidth*ratio,h=c.height=c.clientHeight*ratio,l=230,t=42,r=70,b=32,data=rows.slice(0,12).map(v=>({label:String(v[labelKey]||'-'),value:Number(v[valueKey]||0)})),max=Math.max(1,...data.map(v=>v.value));x.clearRect(0,0,w,h);if(!data.length){emptyChart(x,w,h);return}const row=(h-t-b)/Math.max(data.length,1),barH=Math.min(row*.52,28);x.strokeStyle='#edf0f3';x.lineWidth=1;data.forEach((v,i)=>{let y=t+i*row+row/2-barH/2,bw=(w-l-r)*v.value/max;x.fillStyle='#60656f';x.font='18px Arial';x.textAlign='right';x.fillText(v.label.slice(0,24),l-16,y+barH*.75);x.fillStyle=color;x.beginPath();x.roundRect(l,y,bw,barH,12);x.fill();x.fillStyle='#3159c9';x.font='bold 18px Arial';x.textAlign='left';x.fillText(fmt(v.value),l+bw+8,y+barH*.75)});},30)}
   async function load(){try{el('updated').textContent=new Date().toLocaleString(); if(current==='overview')return overviewView(); if(current==='participants')return participantsView(); if(current==='codes')return codesView(); if(current==='regions')return regionsView(); if(current==='payments')return paymentsView(); if(current==='export')return exportView()}catch(e){el(current).innerHTML='<div class="panel"><b>Xatolik:</b> '+esc(e.message)+'</div>'}}
-  async function overviewView(){const d=await api('/dashboard/api/overview?'+qs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+fmt(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3><div class="tabs"><button class="tab active red">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart" id="redChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3><div class="tabs"><button class="tab active blue">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart" id="userChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3><div class="tabs"><button class="tab active green">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart wide" id="wideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button><button class="tab">Odamlar soni</button></div></div><canvas class="chart tall" id="regionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta kiritganlar, 3-5 marta kiritganlar</div><canvas class="chart tall" id="bucketChart"></canvas></div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9'); lineChart('wideUserChart',d.dailyUsers,'#0ca750'); horizontalChart('regionChart',d.regionStats,'#c4002f','region','redemptions'); barChart('bucketChart',d.codeBuckets,'#3159c9','bucket','users')}
+  async function overviewView(){const d=await api('/dashboard/api/overview?'+qs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3><div class="tabs"><button class="tab active red">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart" id="redChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3><div class="tabs"><button class="tab active blue">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart" id="userChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3><div class="tabs"><button class="tab active green">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart wide" id="wideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button><button class="tab">Odamlar soni</button></div></div><canvas class="chart tall" id="regionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta kiritganlar, 3-5 marta kiritganlar</div><canvas class="chart tall" id="bucketChart"></canvas></div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9'); lineChart('wideUserChart',d.dailyUsers,'#0ca750'); horizontalChart('regionChart',d.regionStats,'#c4002f','region','redemptions'); barChart('bucketChart',d.codeBuckets,'#3159c9','bucket','users')}
   function regionBars(rows){const max=Math.max(1,...rows.map(r=>Number(r.redemptions))); return '<table><tbody>'+rows.map(r=>'<tr><td><b>'+esc(r.region)+'</b></td><td>'+fmt(r.users)+'</td><td class="money">'+fmt(r.redemptions)+'</td><td><div class="bar"><span style="width:'+Math.round(Number(r.redemptions)*100/max)+'%"></span></div></td></tr>').join('')+'</tbody></table>'}
   function setCodeFilter(v){codeFilter=v; participantsView()}
-  async function participantsView(){const map={one:'minCodes=1&maxCodes=1',two:'minCodes=2&maxCodes=2',three:'minCodes=3&maxCodes=5',six:'minCodes=6&maxCodes=10',ten:'minCodes=10',fifty:'minCodes=50'}; const extra=codeFilter?('&'+map[codeFilter]):''; const [d,stats]=await Promise.all([api('/dashboard/api/participants?'+qs()+extra),api('/dashboard/api/overview?'+qs())]); const s=stats.summary; const chips=[['','Hammasi'],['one','1'],['two','2'],['three','3-5'],['six','6-10'],['ten','10+'],['fifty','50+']].map(c=>'<button class="chip '+(codeFilter===c[0]?'active':'')+'" data-code-filter="'+esc(c[0])+'">'+c[1]+'</button>').join(''); const dashboard='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+fmt(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3><div class="tabs"><button class="tab active red">Kunlik</button></div></div><canvas class="chart" id="participantsRedChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3><div class="tabs"><button class="tab active blue">Kunlik</button></div></div><canvas class="chart" id="participantsUserChart"></canvas></div></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="participantsRegionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta, 3-5 marta, 10+ marta kiritganlar</div><canvas class="chart tall" id="participantsBucketChart"></canvas></div></div>'; el('participants').innerHTML=dashboard+'<div class="panel"><div class="panel-head"><b>Jami: '+fmt(d.total)+'</b><a class="btn danger" href="/dashboard/export?type=participants">CSV yuklab olish</a></div><div class="filter-row"><b>Promokodlar soni:</b>'+chips+'</div></div>'+participantsTable(d.rows); lineChart('participantsRedChart',stats.dailyRedemptions,'#c4002f'); lineChart('participantsUserChart',stats.dailyUsers,'#3159c9'); horizontalChart('participantsRegionChart',stats.regionStats,'#c4002f','region','redemptions'); barChart('participantsBucketChart',stats.codeBuckets,'#3159c9','bucket','users'); document.querySelectorAll('[data-code-filter]').forEach(b=>b.onclick=()=>setCodeFilter(b.dataset.codeFilter||'')); document.querySelectorAll('[data-user-id]').forEach(b=>b.onclick=()=>showParticipant(b.dataset.userId))}
+  async function participantsView(){const map={one:'minCodes=1&maxCodes=1',two:'minCodes=2&maxCodes=2',three:'minCodes=3&maxCodes=5',six:'minCodes=6&maxCodes=10',ten:'minCodes=10',fifty:'minCodes=50'}; const extra=codeFilter?('&'+map[codeFilter]):''; const [d,stats]=await Promise.all([api('/dashboard/api/participants?'+qs(false)+extra),api('/dashboard/api/overview?'+qs(false))]); const s=stats.summary; const chips=[['','Hammasi'],['one','1'],['two','2'],['three','3-5'],['six','6-10'],['ten','10+'],['fifty','50+']].map(c=>'<button class="chip '+(codeFilter===c[0]?'active':'')+'" data-code-filter="'+esc(c[0])+'">'+c[1]+'</button>').join(''); const dashboard='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3><div class="tabs"><button class="tab active red">Kunlik</button></div></div><canvas class="chart" id="participantsRedChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3><div class="tabs"><button class="tab active blue">Kunlik</button></div></div><canvas class="chart" id="participantsUserChart"></canvas></div></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="participantsRegionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta, 3-5 marta, 10+ marta kiritganlar</div><canvas class="chart tall" id="participantsBucketChart"></canvas></div></div>'; el('participants').innerHTML=dashboard+'<div class="panel"><div class="panel-head"><b>Jami: '+fmt(d.total)+'</b><a class="btn danger" href="/dashboard/export?type=participants">CSV yuklab olish</a></div><div class="filter-row"><b>Promokodlar soni:</b>'+chips+'</div></div>'+participantsTable(d.rows); lineChart('participantsRedChart',stats.dailyRedemptions,'#c4002f'); lineChart('participantsUserChart',stats.dailyUsers,'#3159c9'); horizontalChart('participantsRegionChart',stats.regionStats,'#c4002f','region','redemptions'); barChart('participantsBucketChart',stats.codeBuckets,'#3159c9','bucket','users'); document.querySelectorAll('[data-code-filter]').forEach(b=>b.onclick=()=>setCodeFilter(b.dataset.codeFilter||'')); document.querySelectorAll('[data-user-id]').forEach(b=>b.onclick=()=>showParticipant(b.dataset.userId))}
   function participantsTable(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; return '<table><thead><tr><th>#</th><th>Ism familiya</th><th>Hudud</th><th>Telefon</th><th>Til</th><th>Promokodlar soni</th><th>Yutuq</th><th>Royxatdan otgan</th><th>Amal</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.fullName||'-')+'</b><div class="muted">'+esc(r.telegramId)+'</div></td><td>'+esc(r.address||'-')+'</td><td>'+esc(r.phone||'-')+'</td><td>'+esc(r.language)+'</td><td class="money">'+fmt(r.codesUsed)+'</td><td>'+fmt(r.rewardAmount)+'</td><td>'+date(r.createdAt)+'</td><td><button class="btn secondary" data-user-id="'+esc(r.telegramId)+'">Korish</button></td></tr>').join('')+'</tbody></table>'}
   async function showParticipant(id){const d=await api('/dashboard/api/participants/'+encodeURIComponent(id)); const p=d.participant; el('modal').classList.remove('hidden'); el('modal').innerHTML='<div class="modal-card"><div class="modal-head"><div><h2>'+esc(p.fullName||'Nomsiz')+'</h2><div class="muted">User ID: '+esc(p.telegramId)+' | '+esc(p.address||'-')+'</div></div><button class="close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="stat-grid"><div class="stat"><div class="label">Telefon</div><b>'+esc(p.phone||'-')+'</b></div><div class="stat"><div class="label">Promokodlar</div><b>'+fmt(p.codesUsed)+'</b></div><div class="stat"><div class="label">Yutuq summa</div><b>'+fmt(p.rewardAmount)+'</b></div><div class="stat"><div class="label">Royxatdan otgan</div><b>'+date(p.createdAt)+'</b></div></div><h3>Kiritgan promokodlari</h3>'+participantCodesTable(d.codes)+'</div></div>'}
   function participantCodesTable(rows){if(!rows.length)return '<div class="muted">Promokod kiritmagan</div>'; return '<table><thead><tr><th>#</th><th>Promokod suffix</th><th>Sana</th><th>Yutuq</th><th>Redemption</th><th>Paynet</th><th>Xato</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.codeSuffix)+'</b></td><td>'+date(r.createdAt)+'</td><td>'+fmt(r.rewardAmount)+'</td><td>'+esc(r.redemptionStatus)+'</td><td>'+esc(r.paynetStatus||'-')+'</td><td>'+esc(r.errorMessage||'-')+'</td></tr>').join('')+'</tbody></table>'}
