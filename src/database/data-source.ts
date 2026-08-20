@@ -9,6 +9,7 @@ import { TelegramUser } from "../entities/TelegramUser";
 import { InitialSchema1720000000000 } from "./migrations/1720000000000-InitialSchema";
 import { AddPaynetTransactions1720000001000 } from "./migrations/1720000001000-AddPaynetTransactions";
 import { AddPromoCodeCatalog1720000002000 } from "./migrations/1720000002000-AddPromoCodeCatalog";
+import { AddEncryptedPromoCode1720000003000 } from "./migrations/1720000003000-AddEncryptedPromoCode";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -20,5 +21,10 @@ export const AppDataSource = new DataSource({
   synchronize: false,
   logging: env.nodeEnv === "development" ? ["error", "warn"] : ["error"],
   entities: [TelegramUser, PromoCode, PaynetTransaction, PromoCodeCatalog, PromoCodeRedemption],
-  migrations: [InitialSchema1720000000000, AddPaynetTransactions1720000001000, AddPromoCodeCatalog1720000002000],
+  migrations: [
+    InitialSchema1720000000000,
+    AddPaynetTransactions1720000001000,
+    AddPromoCodeCatalog1720000002000,
+    AddEncryptedPromoCode1720000003000,
+  ],
 });

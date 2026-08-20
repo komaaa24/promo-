@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { AppDataSource } from "../database/data-source";
-import { getCodeSuffix, hashPromoCode, normalizePromoCode } from "../promo/promo-code-utils";
+import { encryptPromoCode, getCodeSuffix, hashPromoCode, normalizePromoCode } from "../promo/promo-code-utils";
 import { env } from "../config/env";
 
 const DEFAULT_BATCH_SIZE = 1000;
@@ -44,18 +44,19 @@ async function importBatch(batch: string[]): Promise<void> {
   const params: Array<string | number> = [];
 
   batch.forEach((code, index) => {
-    const offset = index * 3;
-    values.push(`($${offset + 1}, $${offset + 2}, $${offset + 3})`);
-    params.push(hashPromoCode(code), getCodeSuffix(code), env.promo.defaultRewardAmount);
+    const offset = index * 4;
+    values.push(`($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`);
+    params.push(hashPromoCode(code), getCodeSuffix(code), encryptPromoCode(code), env.promo.defaultRewardAmount);
   });
 
   await AppDataSource.query(
     `
-      INSERT INTO "promo_code_catalog" ("codeHash", "codeSuffix", "rewardAmount")
+      INSERT INTO "promo_code_catalog" ("codeHash", "codeSuffix", "codeEncrypted", "rewardAmount")
       VALUES ${values.join(", ")}
       ON CONFLICT ("codeHash") DO UPDATE
       SET
-        "rewardAmount" = EXCLUDED."rewardAmount",
+        "codeSuffix" = EXCLUDED."codeSuffix",
+        "codeEncrypted" = EXCLUDED."codeEncrypted",
         "updatedAt" = now()
     `,
     params,

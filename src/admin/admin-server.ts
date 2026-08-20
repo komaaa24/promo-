@@ -4,6 +4,7 @@ import { DataSource } from "typeorm";
 import { env } from "../config/env";
 import { logger } from "../logger";
 import { PaynetService } from "../payments/paynet-service";
+import { decryptPromoCode, hashPromoCode, normalizePromoCode } from "../promo/promo-code-utils";
 
 type QueryParam = string | number | boolean;
 
@@ -220,6 +221,12 @@ function appendPromoCodeSearch(clauses: string[], params: QueryParam[], q: strin
   if (compact) {
     params.push(`%${compact.slice(-8)}%`);
     parts.push(`c."codeSuffix" ILIKE $${params.length}`);
+  }
+
+  const normalizedCode = normalizePromoCode(text);
+  if (normalizedCode) {
+    params.push(hashPromoCode(normalizedCode));
+    parts.push(`c."codeHash" = $${params.length}`);
   }
 
   if (digits) {
@@ -459,6 +466,7 @@ async function getParticipantDetail(dataSource: DataSource, telegramId: string):
       SELECT
         r."createdAt",
         c."codeSuffix",
+        c."codeEncrypted",
         r."rewardAmount",
         r."status" AS "redemptionStatus",
         r."errorMessage",
@@ -475,7 +483,14 @@ async function getParticipantDetail(dataSource: DataSource, telegramId: string):
     [participant.id],
   );
 
-  return { participant, codes };
+  return {
+    participant,
+    codes: codes.map((row: Record<string, unknown>) => ({
+      ...row,
+      code: decryptPromoCode(row.codeEncrypted as string | null) ?? row.codeSuffix,
+      codeEncrypted: undefined,
+    })),
+  };
 }
 
 async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string, unknown>> {
@@ -539,6 +554,7 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
       SELECT
         c."id" AS "promoCodeId",
         c."codeSuffix",
+        c."codeEncrypted",
         c."rewardAmount",
         c."isActive",
         c."redeemedAt",
@@ -566,7 +582,16 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
     params,
   );
 
-  return { total: countRow.total, summary, mode: effectiveMode, rows };
+  return {
+    total: countRow.total,
+    summary,
+    mode: effectiveMode,
+    rows: rows.map((row: Record<string, unknown>) => ({
+      ...row,
+      code: decryptPromoCode(row.codeEncrypted as string | null) ?? row.codeSuffix,
+      codeEncrypted: undefined,
+    })),
+  };
 }
 
 async function getRegions(dataSource: DataSource, url?: URL): Promise<Record<string, unknown>[]> {
@@ -749,10 +774,11 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  return dataSource.query(
+  const rows = await dataSource.query(
     `
       SELECT
-        c."codeSuffix" AS "promokod_suffix",
+        c."codeEncrypted",
+        c."codeSuffix",
         c."rewardAmount" AS "yutuq_summa",
         CASE
           WHEN c."redeemedAt" IS NOT NULL THEN 'kiritilgan'
@@ -777,6 +803,15 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
     `,
     params,
   );
+
+  return rows.map((row: Record<string, unknown>) => {
+    const { codeEncrypted, codeSuffix, ...rest } = row;
+
+    return {
+      promokod: decryptPromoCode(codeEncrypted as string | null) ?? codeSuffix,
+      ...rest,
+    };
+  });
 }
 
 function loginHtml(error = ""): string {
@@ -830,18 +865,15 @@ function dashboardHtml(): string {
   function chartTabs(color){return '<div class="tabs"><button class="tab '+(chartGroup==='day'?'active '+color:'')+'" data-chart-group="day">Kunlik</button><button class="tab '+(chartGroup==='month'?'active '+color:'')+'" data-chart-group="month">Oylik</button></div>'} function bindChartTabs(){document.querySelectorAll('[data-chart-group]').forEach(b=>b.onclick=()=>{chartGroup=b.dataset.chartGroup;load()})}
   async function overviewView(){const d=await api('/dashboard/api/overview?'+statsQs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3>'+chartTabs('red')+'</div><canvas class="chart" id="redChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3>'+chartTabs('blue')+'</div><canvas class="chart" id="userChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3>'+chartTabs('green')+'</div><canvas class="chart wide" id="wideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="regionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta kiritganlar, 3-5 marta kiritganlar</div><canvas class="chart tall" id="bucketChart"></canvas></div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9'); lineChart('wideUserChart',d.dailyUsers,'#0ca750'); horizontalChart('regionChart',d.regionStats,'#c4002f','region','redemptions'); barChart('bucketChart',d.codeBuckets,'#3159c9','bucket','users'); bindChartTabs()}
   function regionBars(rows){const max=Math.max(1,...rows.map(r=>Number(r.redemptions))); return '<table><tbody>'+rows.map(r=>'<tr><td><b>'+esc(r.region)+'</b></td><td>'+fmt(r.users)+'</td><td class="money">'+fmt(r.redemptions)+'</td><td><div class="bar"><span style="width:'+Math.round(Number(r.redemptions)*100/max)+'%"></span></div></td></tr>').join('')+'</tbody></table>'}
-  async function participantsView(){const [d,stats]=await Promise.all([api('/dashboard/api/participants?'+qs(false)),api('/dashboard/api/overview?'+statsQs(false))]); const s=stats.summary; const dashboard='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3>'+chartTabs('red')+'</div><canvas class="chart" id="participantsRedChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3>'+chartTabs('blue')+'</div><canvas class="chart" id="participantsUserChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3>'+chartTabs('green')+'</div><canvas class="chart wide" id="participantsWideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="participantsRegionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta, 3-5 marta, 10+ marta kiritganlar</div><canvas class="chart tall" id="participantsBucketChart"></canvas></div></div>'; el('participants').innerHTML=dashboard+participantsTable(d.rows); lineChart('participantsRedChart',stats.dailyRedemptions,'#c4002f'); lineChart('participantsUserChart',stats.dailyUsers,'#3159c9'); lineChart('participantsWideUserChart',stats.dailyUsers,'#0ca750'); horizontalChart('participantsRegionChart',stats.regionStats,'#c4002f','region','redemptions'); barChart('participantsBucketChart',stats.codeBuckets,'#3159c9','bucket','users'); bindChartTabs(); document.querySelectorAll('[data-user-id]').forEach(b=>b.onclick=()=>showParticipant(b.dataset.userId))}
-  function participantsTable(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; return '<table><thead><tr><th>#</th><th>Ism familiya</th><th>Hudud</th><th>Telefon</th><th>Til</th><th>Promokodlar soni</th><th>Yutuq</th><th>Royxatdan otgan</th><th>Amal</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.fullName||'-')+'</b><div class="muted">'+esc(r.telegramId)+'</div></td><td>'+esc(r.address||'-')+'</td><td>'+esc(r.phone||'-')+'</td><td>'+esc(r.language)+'</td><td class="money">'+fmt(r.codesUsed)+'</td><td>'+fmt(r.rewardAmount)+'</td><td>'+date(r.createdAt)+'</td><td><button class="btn secondary" data-user-id="'+esc(r.telegramId)+'">Korish</button></td></tr>').join('')+'</tbody></table>'}
-  async function showParticipant(id){const d=await api('/dashboard/api/participants/'+encodeURIComponent(id)); const p=d.participant; el('modal').classList.remove('hidden'); el('modal').innerHTML='<div class="modal-card"><div class="modal-head"><div><h2>'+esc(p.fullName||'Nomsiz')+'</h2><div class="muted">User ID: '+esc(p.telegramId)+' | '+esc(p.address||'-')+'</div></div><button class="close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="stat-grid"><div class="stat"><div class="label">Telefon</div><b>'+esc(p.phone||'-')+'</b></div><div class="stat"><div class="label">Promokodlar</div><b>'+fmt(p.codesUsed)+'</b></div><div class="stat"><div class="label">Yutuq summa</div><b>'+fmt(p.rewardAmount)+'</b></div><div class="stat"><div class="label">Royxatdan otgan</div><b>'+date(p.createdAt)+'</b></div></div><h3>Kiritgan promokodlari</h3>'+participantCodesTable(d.codes)+'</div></div>'}
-  function participantCodesTable(rows){if(!rows.length)return '<div class="muted">Promokod kiritmagan</div>'; return '<table><thead><tr><th>#</th><th>Promokod suffix</th><th>Sana</th><th>Yutuq</th><th>Redemption</th><th>Paynet</th><th>Xato</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.codeSuffix)+'</b></td><td>'+date(r.createdAt)+'</td><td>'+fmt(r.rewardAmount)+'</td><td>'+esc(r.redemptionStatus)+'</td><td>'+esc(r.paynetStatus||'-')+'</td><td>'+esc(r.errorMessage||'-')+'</td></tr>').join('')+'</tbody></table>'}
+  async function participantsView(){const stats=await api('/dashboard/api/overview?'+statsQs(false)); const s=stats.summary; const dashboard='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3>'+chartTabs('red')+'</div><canvas class="chart" id="participantsRedChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3>'+chartTabs('blue')+'</div><canvas class="chart" id="participantsUserChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3>'+chartTabs('green')+'</div><canvas class="chart wide" id="participantsWideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="participantsRegionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta, 3-5 marta, 10+ marta kiritganlar</div><canvas class="chart tall" id="participantsBucketChart"></canvas></div></div>'; el('participants').innerHTML=dashboard; lineChart('participantsRedChart',stats.dailyRedemptions,'#c4002f'); lineChart('participantsUserChart',stats.dailyUsers,'#3159c9'); lineChart('participantsWideUserChart',stats.dailyUsers,'#0ca750'); horizontalChart('participantsRegionChart',stats.regionStats,'#c4002f','region','redemptions'); barChart('participantsBucketChart',stats.codeBuckets,'#3159c9','bucket','users'); bindChartTabs()}
   function closeModal(){el('modal').classList.add('hidden'); el('modal').innerHTML=''}
   function setCodesMode(v){codesMode=v; if(v==='used'&&(codesStatus==='available'||codesStatus==='blocked'))codesStatus=''; codesView()} function setCodesStatus(v){codesStatus=v; if(v==='available'||v==='blocked')codesMode='all'; codesView()}
-  async function codesView(){const d=await api('/dashboard/api/codes?'+qs()+'&mode='+codesMode+(codesStatus?'&status='+codesStatus:'')); const s=d.summary; const modeTabs=[['used','Kiritilgan promokodlar'],['all','Barcha promokodlar']].map(x=>'<button class="chip '+(codesMode===x[0]?'active':'')+'" data-code-mode="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['winner','Yutuqli'],['available','Kiritilmagan'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(codesStatus===x[0]?'active':'')+'" data-code-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('codes').innerHTML='<div class="kpis"><div class="card"><div class="label">Jami promokodlar</div><div class="value">'+fmt(s.totalCodes)+'</div></div><div class="card hot"><div class="label">Kiritilgan promokodlar</div><div class="value">'+fmt(s.usedCodes)+'</div></div><div class="card"><div class="label">Kiritilmagan</div><div class="value">'+fmt(s.unusedCodes)+'</div></div><div class="card"><div class="label">Yutuqli</div><div class="value">'+fmt(s.winnerCodes)+'</div></div></div><div class="panel"><div class="panel-head"><div><b>Jadval: '+fmt(d.total)+'</b><div class="hint">DB xavfsizligi sabab toliq promokod saqlanmaydi; suffix, user, vaqt va payout status ko‘rsatiladi.</div></div><a class="btn danger" href="/dashboard/export?type=codes">CSV yuklab olish</a></div><div class="filter-row"><b>Korinish:</b>'+modeTabs+'</div><div class="filter-row"><b>Status:</b>'+statusTabs+'</div></div>'+codesTable(d.rows); document.querySelectorAll('[data-code-mode]').forEach(b=>b.onclick=()=>setCodesMode(b.dataset.codeMode)); document.querySelectorAll('[data-code-status]').forEach(b=>b.onclick=()=>setCodesStatus(b.dataset.codeStatus||''))}
-  function codesTable(rows){if(!rows.length)return '<div class="panel muted">Promokod topilmadi</div>'; return '<table><thead><tr><th>#</th><th>Promokod</th><th>Ishtirokchi</th><th>Telefon</th><th>Telegram ID</th><th>Hudud</th><th>Sana</th><th>Vaqt</th><th>Yutuq</th><th>Holat</th><th>Paynet</th><th>Provider</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.codeSuffix)+'</b><div class="muted">ID: '+esc(shortId(r.promoCodeId))+'</div></td><td><b>'+esc(r.fullName||'-')+'</b></td><td>'+esc(r.phone||r.paynetPhone||'-')+'</td><td>'+esc(r.telegramId||'-')+'</td><td>'+esc(r.address||'-')+'</td><td>'+day(r.redeemedAt||r.importedAt)+'</td><td>'+time(r.redeemedAt||r.importedAt)+'</td><td class="money">'+fmt(r.rewardAmount)+'</td><td>'+(r.redeemedAt?statusBadge(true,'Kiritilgan'):(r.isActive?'<span class="badge bad">Kiritilmagan</span>':'<span class="badge bad">Bloklangan</span>'))+'<div class="muted">'+esc(r.redemptionStatus||'-')+'</div></td><td>'+paynetBadge(r.paynetStatus)+'<div class="muted">'+(r.paynetAmount?fmt(r.paynetAmount)+' so‘m':'')+'</div></td><td>'+esc(r.providerId||r.providerUuid||'-')+'<div class="muted">'+esc(r.errorMessage||'')+'</div></td></tr>').join('')+'</tbody></table>'}
+  async function codesView(){const d=await api('/dashboard/api/codes?'+qs()+'&mode='+codesMode+(codesStatus?'&status='+codesStatus:'')); const s=d.summary; const modeTabs=[['used','Kiritilgan promokodlar'],['all','Barcha promokodlar']].map(x=>'<button class="chip '+(codesMode===x[0]?'active':'')+'" data-code-mode="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['winner','Yutuqli'],['available','Kiritilmagan'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(codesStatus===x[0]?'active':'')+'" data-code-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('codes').innerHTML='<div class="kpis"><div class="card"><div class="label">Jami promokodlar</div><div class="value">'+fmt(s.totalCodes)+'</div></div><div class="card hot"><div class="label">Kiritilgan promokodlar</div><div class="value">'+fmt(s.usedCodes)+'</div></div><div class="card"><div class="label">Kiritilmagan</div><div class="value">'+fmt(s.unusedCodes)+'</div></div><div class="card"><div class="label">Yutuqli</div><div class="value">'+fmt(s.winnerCodes)+'</div></div></div><div class="panel"><div class="panel-head"><div><b>Jadval: '+fmt(d.total)+'</b><div class="hint">To‘liq promokod, user, vaqt va payout status ko‘rsatiladi. Eski importlarda to‘liq kod uchun Excelni qayta import qilish kerak.</div></div><a class="btn danger" href="/dashboard/export?type=codes">CSV yuklab olish</a></div><div class="filter-row"><b>Korinish:</b>'+modeTabs+'</div><div class="filter-row"><b>Status:</b>'+statusTabs+'</div></div>'+codesTable(d.rows); document.querySelectorAll('[data-code-mode]').forEach(b=>b.onclick=()=>setCodesMode(b.dataset.codeMode)); document.querySelectorAll('[data-code-status]').forEach(b=>b.onclick=()=>setCodesStatus(b.dataset.codeStatus||''))}
+  function codesTable(rows){if(!rows.length)return '<div class="panel muted">Promokod topilmadi</div>'; return '<table><thead><tr><th>#</th><th>Promokod</th><th>Ishtirokchi</th><th>Telefon</th><th>Telegram ID</th><th>Hudud</th><th>Sana</th><th>Vaqt</th><th>Yutuq</th><th>Holat</th><th>Paynet</th><th>Provider</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.code)+'</b><div class="muted">ID: '+esc(shortId(r.promoCodeId))+'</div></td><td><b>'+esc(r.fullName||'-')+'</b></td><td>'+esc(r.phone||r.paynetPhone||'-')+'</td><td>'+esc(r.telegramId||'-')+'</td><td>'+esc(r.address||'-')+'</td><td>'+day(r.redeemedAt||r.importedAt)+'</td><td>'+time(r.redeemedAt||r.importedAt)+'</td><td class="money">'+fmt(r.rewardAmount)+'</td><td>'+(r.redeemedAt?statusBadge(true,'Kiritilgan'):(r.isActive?'<span class="badge bad">Kiritilmagan</span>':'<span class="badge bad">Bloklangan</span>'))+'<div class="muted">'+esc(r.redemptionStatus||'-')+'</div></td><td>'+paynetBadge(r.paynetStatus)+'<div class="muted">'+(r.paynetAmount?fmt(r.paynetAmount)+' so‘m':'')+'</div></td><td>'+esc(r.providerId||r.providerUuid||'-')+'<div class="muted">'+esc(r.errorMessage||'')+'</div></td></tr>').join('')+'</tbody></table>'}
   async function regionsView(){const rows=await api('/dashboard/api/regions'); el('regions').innerHTML='<div class="panel">'+table(rows)+'</div>'}
   async function paymentsView(){const d=await api('/dashboard/api/payments?'+qs()); el('payments').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Paynet tranzaksiyalari, provider javoblari va xatolar nazorati.</div></div><button class="btn danger" onclick="retryFailedPaynet()">Failed payout retry</button></div></div>'+table(d.rows)}
   async function retryFailedPaynet(){if(!confirm('Failed payoutlar qayta yuborilsinmi?'))return; const result=await api('/dashboard/api/paynet/retry-failed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); alert(JSON.stringify(result,null,2)); load()}
-  function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Yuqoridagi qidirish, hudud va sana filtrlariga qarab CSV tayyorlanadi. Ism, telefon, user ID yoki promokod suffix yozib yuklab olish mumkin.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Status</label><select id="exportStatus"><option value="">Hammasi</option><option value="winner">Yutuqli promokodlar</option><option value="available">Kiritilmagan promokodlar</option><option value="blocked">Bloklangan promokodlar</option></select><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div class="panel"><h3>Yuklab olish</h3><p>Eksport real bazadan olinadi. To‘liq promokod xavfsizlik sabab chiqmaydi, suffix va bog‘langan ishtirokchi ma’lumotlari chiqadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'}
+  function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Yuqoridagi qidirish, hudud va sana filtrlariga qarab CSV tayyorlanadi. Ism, telefon, user ID yoki promokod yozib yuklab olish mumkin.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Status</label><select id="exportStatus"><option value="">Hammasi</option><option value="winner">Yutuqli promokodlar</option><option value="available">Kiritilmagan promokodlar</option><option value="blocked">Bloklangan promokodlar</option></select><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div class="panel"><h3>Yuklab olish</h3><p>Eksport real bazadan olinadi. Yangi import qilingan promokodlar to‘liq ko‘rinadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'}
   function downloadExport(){const p=new URLSearchParams(qs()); const type=el('exportType').value; const status=el('exportStatus').value; const min=el('exportMinCodes').value; if(status)p.set('status',status); if(min)p.set('minCodes',min); location='/dashboard/export?type='+encodeURIComponent(type)+'&'+p.toString()}
   setInterval(()=>el('clock').textContent=new Date().toLocaleTimeString(),1000); setInterval(()=>load().catch(()=>{}),30000); load();
   </script></body></html>`;

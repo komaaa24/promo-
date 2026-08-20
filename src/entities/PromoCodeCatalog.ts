@@ -21,6 +21,9 @@ export class PromoCodeCatalog {
   @Column({ type: "varchar", length: 8 })
   codeSuffix!: string;
 
+  @Column({ type: "text", nullable: true })
+  codeEncrypted!: string | null;
+
   @Column({ type: "integer", default: 0 })
   rewardAmount!: number;
 
