@@ -283,8 +283,36 @@ async function getParticipants(dataSource: DataSource, url: URL): Promise<Record
     clauses.push(`(u."fullName" ILIKE $${params.length} OR u."phone" ILIKE $${params.length} OR u."telegramId"::text ILIKE $${params.length})`);
   }
 
+  const minCodes = Number(url.searchParams.get("minCodes") ?? "");
+  const maxCodes = Number(url.searchParams.get("maxCodes") ?? "");
+  const having: string[] = [];
+
+  if (Number.isInteger(minCodes) && minCodes >= 0) {
+    params.push(minCodes);
+    having.push(`COUNT(r."id") >= $${params.length}`);
+  }
+
+  if (Number.isInteger(maxCodes) && maxCodes >= 0) {
+    params.push(maxCodes);
+    having.push(`COUNT(r."id") <= $${params.length}`);
+  }
+
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const [countRow] = await dataSource.query(`SELECT COUNT(*)::int AS total FROM "telegram_users" u ${where}`, params);
+  const havingSql = having.length ? `HAVING ${having.join(" AND ")}` : "";
+  const [countRow] = await dataSource.query(
+    `
+      SELECT COUNT(*)::int AS total
+      FROM (
+        SELECT u."id"
+        FROM "telegram_users" u
+        LEFT JOIN "promo_code_redemptions" r ON r."userId" = u."id"
+        ${where}
+        GROUP BY u."id"
+        ${havingSql}
+      ) filtered
+    `,
+    params,
+  );
   params.push(limit, offset);
 
   const rows = await dataSource.query(
@@ -305,6 +333,7 @@ async function getParticipants(dataSource: DataSource, url: URL): Promise<Record
       LEFT JOIN "paynet_transactions" p ON p."userId" = u."id"
       ${where}
       GROUP BY u."id"
+      ${havingSql}
       ORDER BY u."createdAt" DESC
       LIMIT $${params.length - 1} OFFSET $${params.length}
     `,
@@ -314,6 +343,58 @@ async function getParticipants(dataSource: DataSource, url: URL): Promise<Record
   return { total: countRow.total, rows };
 }
 
+async function getParticipantDetail(dataSource: DataSource, telegramId: string): Promise<Record<string, unknown>> {
+  const [participant] = (await dataSource.query(
+    `
+      SELECT
+        u."id",
+        u."telegramId",
+        u."fullName",
+        u."phone",
+        u."address",
+        u."language",
+        u."step",
+        u."createdAt",
+        COUNT(r."id")::int AS "codesUsed",
+        COALESCE(SUM(r."rewardAmount"), 0)::int AS "rewardAmount",
+        COUNT(p."id") FILTER (WHERE p."status" = 'failed')::int AS "failedPayments"
+      FROM "telegram_users" u
+      LEFT JOIN "promo_code_redemptions" r ON r."userId" = u."id"
+      LEFT JOIN "paynet_transactions" p ON p."userId" = u."id"
+      WHERE u."telegramId" = $1
+      GROUP BY u."id"
+    `,
+    [telegramId],
+  )) as Array<Record<string, unknown>>;
+
+  if (!participant) {
+    throw new Error("Participant not found");
+  }
+
+  const codes = await dataSource.query(
+    `
+      SELECT
+        r."createdAt",
+        c."codeSuffix",
+        r."rewardAmount",
+        r."status" AS "redemptionStatus",
+        r."errorMessage",
+        p."status" AS "paynetStatus",
+        p."providerId",
+        p."providerUuid"
+      FROM "promo_code_redemptions" r
+      JOIN "promo_code_catalog" c ON c."id" = r."promoCodeId"
+      LEFT JOIN "paynet_transactions" p ON p."promoCodeRedemptionId" = r."id"
+      WHERE r."userId" = $1
+      ORDER BY r."createdAt" DESC
+      LIMIT 500
+    `,
+    [participant.id],
+  );
+
+  return { participant, codes };
+}
+
 async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string, unknown>> {
   const limit = parseLimit(url, 50);
   const offset = (parsePage(url) - 1) * limit;
@@ -321,10 +402,16 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
   const clauses: string[] = [];
   const q = url.searchParams.get("q");
   const status = url.searchParams.get("status");
+  const mode = url.searchParams.get("mode") ?? "used";
+  const effectiveMode = status === "available" || status === "blocked" ? "all" : mode;
 
   if (q) {
     params.push(`%${q.replace(/-/g, "").slice(-8)}%`);
-    clauses.push(`c."codeSuffix" ILIKE $${params.length}`);
+    clauses.push(`(c."codeSuffix" ILIKE $${params.length} OR u."fullName" ILIKE $${params.length} OR u."telegramId"::text ILIKE $${params.length})`);
+  }
+
+  if (effectiveMode === "used") {
+    clauses.push(`c."redeemedAt" IS NOT NULL`);
   }
 
   if (status === "winner") {
@@ -338,7 +425,24 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const [countRow] = await dataSource.query(`SELECT COUNT(*)::int AS total FROM "promo_code_catalog" c ${where}`, params);
+  const [summary] = await dataSource.query(`
+    SELECT
+      COUNT(*)::int AS "totalCodes",
+      COUNT(*) FILTER (WHERE "redeemedAt" IS NOT NULL)::int AS "usedCodes",
+      COUNT(*) FILTER (WHERE "redeemedAt" IS NULL)::int AS "unusedCodes",
+      COUNT(*) FILTER (WHERE "rewardAmount" > 0)::int AS "winnerCodes",
+      COUNT(*) FILTER (WHERE "isActive" = false)::int AS "blockedCodes"
+    FROM "promo_code_catalog"
+  `);
+  const [countRow] = await dataSource.query(
+    `
+      SELECT COUNT(*)::int AS total
+      FROM "promo_code_catalog" c
+      LEFT JOIN "telegram_users" u ON u."id" = c."redeemedByUserId"
+      ${where}
+    `,
+    params,
+  );
   params.push(limit, offset);
 
   const rows = await dataSource.query(
@@ -349,11 +453,16 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
         c."rewardAmount",
         c."isActive",
         c."redeemedAt",
+        c."createdAt" AS "importedAt",
         u."telegramId",
         u."fullName",
         u."phone",
+        u."address",
         r."status" AS "redemptionStatus",
-        p."status" AS "paynetStatus"
+        r."errorMessage",
+        p."status" AS "paynetStatus",
+        p."providerId",
+        p."providerUuid"
       FROM "promo_code_catalog" c
       LEFT JOIN "telegram_users" u ON u."id" = c."redeemedByUserId"
       LEFT JOIN "promo_code_redemptions" r ON r."promoCodeId" = c."id"
@@ -365,7 +474,7 @@ async function getCodes(dataSource: DataSource, url: URL): Promise<Record<string
     params,
   );
 
-  return { total: countRow.total, rows };
+  return { total: countRow.total, summary, mode: effectiveMode, rows };
 }
 
 async function getRegions(dataSource: DataSource): Promise<Record<string, unknown>[]> {
@@ -511,31 +620,41 @@ function dashboardHtml(): string {
   nav button{display:flex;align-items:center;gap:12px;width:100%;height:48px;border:0;border-radius:8px;background:transparent;color:#293241;font-weight:700;font-size:16px;padding:0 18px;margin:4px 0;text-align:left;cursor:pointer}
   nav button.active{background:#3159c9;color:#fff}.user{position:absolute;bottom:24px;left:16px;right:16px;background:#f0f2f5;border-radius:8px;padding:14px;display:flex;gap:12px;align-items:center}.avatar{width:40px;height:40px;border-radius:50%;background:#c4002f;color:#fff;display:grid;place-items:center;font-weight:800}
   header{height:68px;background:#fff;border-bottom:1px solid #dde2ea;display:flex;align-items:center;justify-content:space-between;padding:0 32px;position:sticky;top:0;z-index:2}.title{font-size:22px;font-weight:800}.status{display:flex;gap:14px;align-items:center;font-size:13px;color:#4b5563}.dot{width:8px;height:8px;border-radius:50%;background:#40c979;display:inline-block}
-  main{padding:32px;max-width:1540px}.filters,.panel{background:#fff;border:1px solid #dde2ea;border-radius:10px;padding:16px;margin-bottom:22px}.filters{display:grid;grid-template-columns:1.2fr repeat(4,minmax(130px,.5fr));gap:12px;align-items:end}
+  main{padding:32px;max-width:1540px}.filters,.panel{background:#fff;border:1px solid #dde2ea;border-radius:10px;padding:16px;margin-bottom:22px}.filters{display:grid;grid-template-columns:1.2fr repeat(4,minmax(130px,.5fr));gap:12px;align-items:end}.filter-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}.chip{height:36px;border:1px solid #d7dce3;border-radius:18px;background:white;padding:0 14px;font-weight:800;cursor:pointer}.chip.active{background:#3159c9;color:white;border-color:#3159c9}
   label{font-size:11px;font-weight:800;color:#374151;display:block;margin-bottom:6px} input,select{width:100%;height:40px;border:1px solid #d7dce3;border-radius:7px;background:#f2f3f5;padding:0 12px;font-size:14px} .actions{display:flex;gap:8px}
   .btn{height:40px;border:0;border-radius:7px;background:#3159c9;color:white;font-weight:800;padding:0 14px;cursor:pointer;display:inline-flex;align-items:center;text-decoration:none}.btn.secondary{background:#e5e7eb;color:#1f2937}.btn.danger{background:#c4002f}.btn.ghost{background:#f3f4f6;color:#20242a}
   .kpis{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:16px}.card{background:#fff;border:1px solid #dde2ea;border-radius:10px;padding:18px;min-height:108px}.card.hot{border-left:4px solid #c4002f}.label{font-size:11px;font-weight:800;color:#374151;text-transform:uppercase}.value{font-size:28px;font-weight:900;margin-top:10px}.hint{font-size:12px;color:#6b7280;margin-top:8px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}.chart{height:260px;width:100%} table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dde2ea;border-radius:10px;overflow:hidden} th,td{border-bottom:1px solid #e5e7eb;text-align:left;padding:11px 12px;font-size:14px;vertical-align:top} th{background:#eef0f3;font-weight:800}.badge{display:inline-block;border-radius:999px;background:#e8f7ee;color:#00843d;font-weight:800;padding:4px 9px;font-size:12px}.badge.bad{background:#fee2e2;color:#b91c1c}.money{color:#c4002f;font-weight:900}.muted{color:#6b7280}.hidden{display:none}.bar{height:10px;background:#edf0f3;border-radius:20px;overflow:hidden}.bar span{display:block;height:100%;background:#c4002f;border-radius:20px} pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;max-height:380px;overflow:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}.chart{height:260px;width:100%}.chart.tall{height:340px}.chart.wide{height:300px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.tabs{display:flex;background:#f1f3f6;border-radius:8px;padding:4px}.tab{border:0;border-radius:6px;background:transparent;padding:6px 12px;font-weight:800}.tab.active.red{background:#c4002f;color:#fff}.tab.active.blue{background:#3159c9;color:#fff}.tab.active.green{background:#0ca750;color:#fff} table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #dde2ea;border-radius:10px;overflow:hidden} th,td{border-bottom:1px solid #e5e7eb;text-align:left;padding:11px 12px;font-size:14px;vertical-align:top} th{background:#eef0f3;font-weight:800}.badge{display:inline-block;border-radius:999px;background:#e8f7ee;color:#00843d;font-weight:800;padding:4px 9px;font-size:12px}.badge.bad{background:#fee2e2;color:#b91c1c}.money{color:#c4002f;font-weight:900}.muted{color:#6b7280}.hidden{display:none}.bar{height:10px;background:#edf0f3;border-radius:20px;overflow:hidden}.bar span{display:block;height:100%;background:#c4002f;border-radius:20px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:10}.modal.hidden{display:none}.modal-card{width:min(820px,calc(100vw - 32px));max-height:86vh;overflow:auto;background:#fff;border-radius:12px;border:1px solid #d7dce3}.modal-head{display:flex;justify-content:space-between;align-items:flex-start;padding:18px 24px;border-bottom:1px solid #e5e7eb}.modal-body{padding:20px 24px}.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat{background:#f3f4f6;border:1px solid #d7dce3;border-radius:10px;padding:12px}.close{border:0;background:transparent;font-size:24px;cursor:pointer} pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;border-radius:8px;padding:14px;max-height:380px;overflow:auto}
   @media(max-width:900px){.app{grid-template-columns:1fr} aside{position:static;height:auto}.user{position:static;margin-top:20px} header{padding:0 16px} main{padding:16px}.filters,.kpis,.grid2{grid-template-columns:1fr} table{display:block;overflow:auto}}
   </style></head><body><div class="app"><aside><div class="brand">Promo</div><div class="sub">BOSHQARUV PANELI</div><nav>
   <button class="active" data-view="overview">Boshqaruv paneli</button><button data-view="participants">Ishtirokchilar</button><button data-view="codes">Kodlar</button><button data-view="regions">Hududlar</button><button data-view="payments">Paynet</button><button data-view="export">Eksport</button><button data-view="logs">Loglar</button>
   </nav><div class="user"><div class="avatar">A</div><div><b>Admin</b><div class="muted">Boshqaruvchi</div></div></div></aside><section><header><div class="title" id="pageTitle">Boshqaruv paneli</div><div class="status"><span><i class="dot"></i> Jonli <b id="clock"></b></span><span>Yangilandi: <b id="updated">-</b></span><button class="btn ghost" onclick="logout()">Chiqish</button></div></header><main>
   <div class="filters"><div><label>QIDIRISH</label><input id="q" placeholder="Ism, telefon yoki user ID"/></div><div><label>HUDUD</label><input id="region" placeholder="Barcha hududlar"/></div><div><label>SANADAN</label><input id="from" type="date"/></div><div><label>SANAGACHA</label><input id="to" type="date"/></div><div class="actions"><button class="btn" onclick="load()">Qo'llash</button><button class="btn secondary" onclick="clearFilters()">Tozalash</button></div></div>
   <div id="overview" class="view"></div><div id="participants" class="view hidden"></div><div id="codes" class="view hidden"></div><div id="regions" class="view hidden"></div><div id="payments" class="view hidden"></div><div id="export" class="view hidden"></div><div id="logs" class="view hidden"></div>
-  </main></section></div><script>
+  </main></section></div><div id="modal" class="modal hidden"></div><script>
   const el=id=>document.getElementById(id);
   let current='overview'; const titles={overview:'Boshqaruv paneli',participants:'Ishtirokchilar',codes:'Kodlar',regions:'Hududlar',payments:'Paynet nazorati',export:'Eksport',logs:'Loglar'};
-  const fmt=n=>Number(n||0).toLocaleString('ru-RU'); const esc=v=>String(v??'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); const qs=()=>new URLSearchParams({q:el('q').value,region:el('region').value,from:el('from').value,to:el('to').value}).toString();
+  let codeFilter=''; let codesMode='used'; let codesStatus=''; const fmt=n=>Number(n||0).toLocaleString('ru-RU'); const esc=v=>String(v??'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); const qs=()=>new URLSearchParams({q:el('q').value,region:el('region').value,from:el('from').value,to:el('to').value}).toString();
   async function api(path,opt){const r=await fetch(path,opt); if(r.status===401) location='/dashboard/login'; if(!r.ok) throw new Error(await r.text()); return r.json()}
   function setView(v){current=v; document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v)); document.querySelectorAll('.view').forEach(e=>e.classList.add('hidden')); el(v).classList.remove('hidden'); el('pageTitle').textContent=titles[v]; load()}
   document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>setView(b.dataset.view)); function clearFilters(){el('q').value='';el('region').value='';el('from').value='';el('to').value='';load()} function logout(){fetch('/dashboard/logout',{method:'POST'}).then(()=>location='/dashboard/login')}
   function table(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; const keys=Object.keys(rows[0]); return '<table><thead><tr>'+keys.map(k=>'<th>'+esc(k)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(r[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}
+  function date(v){return v?new Date(v).toLocaleString('ru-RU'):''}
   function lineChart(id,rows,color){setTimeout(()=>{const c=document.getElementById(id),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=c.clientHeight*2,m=36,max=Math.max(1,...rows.map(r=>Number(r.count))); x.clearRect(0,0,w,h); x.strokeStyle='#d8dde5'; x.lineWidth=1; for(let i=0;i<5;i++){let y=m+(h-2*m)*i/4; x.beginPath(); x.moveTo(m,y); x.lineTo(w-m,y); x.stroke()} x.strokeStyle=color; x.fillStyle=color+'22'; x.lineWidth=4; x.beginPath(); rows.forEach((r,i)=>{let px=m+(w-2*m)*i/Math.max(rows.length-1,1),py=h-m-(h-2*m)*Number(r.count)/max; i?x.lineTo(px,py):x.moveTo(px,py)}); x.stroke();},30)}
+  function barChart(id,rows,color,labelKey='bucket',valueKey='users'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=c.clientHeight*2,m=48,max=Math.max(1,...rows.map(r=>Number(r[valueKey]))); x.clearRect(0,0,w,h); x.strokeStyle='#d8dde5'; for(let i=0;i<5;i++){let y=m+(h-2*m)*i/4; x.beginPath(); x.moveTo(m,y); x.lineTo(w-m,y); x.stroke()} const bw=(w-2*m)/Math.max(rows.length,1)*.72; rows.forEach((r,i)=>{let v=Number(r[valueKey]),bh=(h-2*m)*v/max,px=m+(w-2*m)*i/rows.length+bw*.2,py=h-m-bh; x.fillStyle=color; x.fillRect(px,py,bw,bh); x.fillStyle='#555'; x.font='22px Arial'; x.textAlign='center'; x.fillText(String(r[labelKey]),px+bw/2,h-m+30)});},30)}
+  function horizontalChart(id,rows,color,labelKey='region',valueKey='redemptions'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=c.clientHeight*2,m=52,l=220,max=Math.max(1,...rows.map(r=>Number(r[valueKey]))); x.clearRect(0,0,w,h); x.font='20px Arial'; rows.slice(0,14).forEach((r,i)=>{let y=m+i*((h-2*m)/14),v=Number(r[valueKey]),bw=(w-l-m)*v/max; x.fillStyle='#60656f'; x.textAlign='right'; x.fillText(String(r[labelKey]).slice(0,22),l-16,y+16); x.fillStyle=color; x.fillRect(l,y,bw,24); x.fillStyle='#3159c9'; x.textAlign='left'; x.font='bold 20px Arial'; x.fillText(fmt(v),l+bw+10,y+18); x.font='20px Arial'});},30)}
   async function load(){try{el('updated').textContent=new Date().toLocaleString(); if(current==='overview')return overviewView(); if(current==='participants')return participantsView(); if(current==='codes')return codesView(); if(current==='regions')return regionsView(); if(current==='payments')return paymentsView(); if(current==='export')return exportView(); if(current==='logs')return logsView()}catch(e){el(current).innerHTML='<div class="panel"><b>Xatolik:</b> '+esc(e.message)+'</div>'}}
-  async function overviewView(){const d=await api('/dashboard/api/overview?'+qs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli kodlar',s.winnerCodes,'Pul tushadigan kodlar'],['Bugungi kodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Kod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+fmt(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><h3>Promokodlar dinamikasi</h3><canvas class="chart" id="redChart"></canvas></div><div class="panel"><h3>Yangi obunachilar</h3><canvas class="chart" id="userChart"></canvas></div></div><div class="grid2"><div class="panel"><h3>Hududlar boyicha</h3>'+regionBars(d.regionStats)+'</div><div class="panel"><h3>Kodlar soni boyicha ishtirokchilar</h3>'+table(d.codeBuckets)+'</div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9')}
+  async function overviewView(){const d=await api('/dashboard/api/overview?'+qs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli kodlar',s.winnerCodes,'Pul tushadigan kodlar'],['Bugungi kodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Kod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+fmt(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3><div class="tabs"><button class="tab active red">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart" id="redChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3><div class="tabs"><button class="tab active blue">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart" id="userChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3><div class="tabs"><button class="tab active green">Kunlik</button><button class="tab">Oylik</button></div></div><canvas class="chart wide" id="wideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Kodlar soni</button><button class="tab">Odamlar soni</button></div></div><canvas class="chart tall" id="regionChart"></canvas></div><div class="panel"><h3>Kodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta kiritganlar, 3-5 marta kiritganlar</div><canvas class="chart tall" id="bucketChart"></canvas></div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9'); lineChart('wideUserChart',d.dailyUsers,'#0ca750'); horizontalChart('regionChart',d.regionStats,'#c4002f','region','redemptions'); barChart('bucketChart',d.codeBuckets,'#3159c9','bucket','users')}
   function regionBars(rows){const max=Math.max(1,...rows.map(r=>Number(r.redemptions))); return '<table><tbody>'+rows.map(r=>'<tr><td><b>'+esc(r.region)+'</b></td><td>'+fmt(r.users)+'</td><td class="money">'+fmt(r.redemptions)+'</td><td><div class="bar"><span style="width:'+Math.round(Number(r.redemptions)*100/max)+'%"></span></div></td></tr>').join('')+'</tbody></table>'}
-  async function participantsView(){const d=await api('/dashboard/api/participants?'+qs()); el('participants').innerHTML='<div class="panel"><b>Jami: '+fmt(d.total)+'</b></div>'+table(d.rows)}
-  async function codesView(){const d=await api('/dashboard/api/codes?'+qs()); el('codes').innerHTML='<div class="panel"><b>Jami: '+fmt(d.total)+'</b><div class="hint">Kodlar xavfsizlik uchun faqat oxirgi 4-8 belgisi bilan korsatiladi.</div></div>'+table(d.rows)}
+  function setCodeFilter(v){codeFilter=v; participantsView()}
+  async function participantsView(){const map={one:'minCodes=1&maxCodes=1',two:'minCodes=2&maxCodes=2',three:'minCodes=3&maxCodes=5',six:'minCodes=6&maxCodes=10',ten:'minCodes=10',fifty:'minCodes=50'}; const extra=codeFilter?('&'+map[codeFilter]):''; const d=await api('/dashboard/api/participants?'+qs()+extra); const chips=[['','Hammasi'],['one','1'],['two','2'],['three','3-5'],['six','6-10'],['ten','10+'],['fifty','50+']].map(c=>'<button class="chip '+(codeFilter===c[0]?'active':'')+'" data-code-filter="'+esc(c[0])+'">'+c[1]+'</button>').join(''); el('participants').innerHTML='<div class="panel"><div class="panel-head"><b>Jami: '+fmt(d.total)+'</b><a class="btn danger" href="/dashboard/export?type=participants">CSV yuklab olish</a></div><div class="filter-row"><b>Kodlar soni:</b>'+chips+'</div></div>'+participantsTable(d.rows); document.querySelectorAll('[data-code-filter]').forEach(b=>b.onclick=()=>setCodeFilter(b.dataset.codeFilter||'')); document.querySelectorAll('[data-user-id]').forEach(b=>b.onclick=()=>showParticipant(b.dataset.userId))}
+  function participantsTable(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; return '<table><thead><tr><th>#</th><th>Ism familiya</th><th>Hudud</th><th>Telefon</th><th>Til</th><th>Kodlar soni</th><th>Yutuq</th><th>Royxatdan otgan</th><th>Amal</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.fullName||'-')+'</b><div class="muted">'+esc(r.telegramId)+'</div></td><td>'+esc(r.address||'-')+'</td><td>'+esc(r.phone||'-')+'</td><td>'+esc(r.language)+'</td><td class="money">'+fmt(r.codesUsed)+'</td><td>'+fmt(r.rewardAmount)+'</td><td>'+date(r.createdAt)+'</td><td><button class="btn secondary" data-user-id="'+esc(r.telegramId)+'">Korish</button></td></tr>').join('')+'</tbody></table>'}
+  async function showParticipant(id){const d=await api('/dashboard/api/participants/'+encodeURIComponent(id)); const p=d.participant; el('modal').classList.remove('hidden'); el('modal').innerHTML='<div class="modal-card"><div class="modal-head"><div><h2>'+esc(p.fullName||'Nomsiz')+'</h2><div class="muted">User ID: '+esc(p.telegramId)+' | '+esc(p.address||'-')+'</div></div><button class="close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="stat-grid"><div class="stat"><div class="label">Telefon</div><b>'+esc(p.phone||'-')+'</b></div><div class="stat"><div class="label">Kodlar</div><b>'+fmt(p.codesUsed)+'</b></div><div class="stat"><div class="label">Yutuq summa</div><b>'+fmt(p.rewardAmount)+'</b></div><div class="stat"><div class="label">Royxatdan otgan</div><b>'+date(p.createdAt)+'</b></div></div><h3>Kiritgan kodlari</h3>'+participantCodesTable(d.codes)+'</div></div>'}
+  function participantCodesTable(rows){if(!rows.length)return '<div class="muted">Kod kiritmagan</div>'; return '<table><thead><tr><th>#</th><th>Kod suffix</th><th>Sana</th><th>Yutuq</th><th>Redemption</th><th>Paynet</th><th>Xato</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.codeSuffix)+'</b></td><td>'+date(r.createdAt)+'</td><td>'+fmt(r.rewardAmount)+'</td><td>'+esc(r.redemptionStatus)+'</td><td>'+esc(r.paynetStatus||'-')+'</td><td>'+esc(r.errorMessage||'-')+'</td></tr>').join('')+'</tbody></table>'}
+  function closeModal(){el('modal').classList.add('hidden'); el('modal').innerHTML=''}
+  function setCodesMode(v){codesMode=v; if(v==='used'&&(codesStatus==='available'||codesStatus==='blocked'))codesStatus=''; codesView()} function setCodesStatus(v){codesStatus=v; if(v==='available'||v==='blocked')codesMode='all'; codesView()}
+  async function codesView(){const d=await api('/dashboard/api/codes?'+qs()+'&mode='+codesMode+(codesStatus?'&status='+codesStatus:'')); const s=d.summary; const modeTabs=[['used','Kiritilgan kodlar'],['all','Barcha kodlar']].map(x=>'<button class="chip '+(codesMode===x[0]?'active':'')+'" data-code-mode="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['winner','Yutuqli'],['available','Kiritilmagan'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(codesStatus===x[0]?'active':'')+'" data-code-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('codes').innerHTML='<div class="kpis"><div class="card"><div class="label">Jami kodlar</div><div class="value">'+fmt(s.totalCodes)+'</div></div><div class="card hot"><div class="label">Kiritilgan kodlar</div><div class="value">'+fmt(s.usedCodes)+'</div></div><div class="card"><div class="label">Kiritilmagan</div><div class="value">'+fmt(s.unusedCodes)+'</div></div><div class="card"><div class="label">Yutuqli</div><div class="value">'+fmt(s.winnerCodes)+'</div></div></div><div class="panel"><div class="panel-head"><div><b>Jadval: '+fmt(d.total)+'</b><div class="hint">DB xavfsizligi sabab toliq promokod saqlanmaydi; suffix, user, vaqt va payout status ko‘rsatiladi.</div></div><a class="btn danger" href="/dashboard/export?type=codes">CSV yuklab olish</a></div><div class="filter-row"><b>Korinish:</b>'+modeTabs+'</div><div class="filter-row"><b>Status:</b>'+statusTabs+'</div></div>'+codesTable(d.rows); document.querySelectorAll('[data-code-mode]').forEach(b=>b.onclick=()=>setCodesMode(b.dataset.codeMode)); document.querySelectorAll('[data-code-status]').forEach(b=>b.onclick=()=>setCodesStatus(b.dataset.codeStatus||''))}
+  function codesTable(rows){if(!rows.length)return '<div class="panel muted">Kod topilmadi</div>'; return '<table><thead><tr><th>#</th><th>Kod suffix</th><th>Ishtirokchi</th><th>User ID</th><th>Hudud</th><th>Kiritilgan vaqt</th><th>Yutuq</th><th>Status</th><th>Paynet</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.codeSuffix)+'</b></td><td>'+esc(r.fullName||'-')+'<div class="muted">'+esc(r.phone||'')+'</div></td><td>'+esc(r.telegramId||'-')+'</td><td>'+esc(r.address||'-')+'</td><td>'+date(r.redeemedAt)+'</td><td class="money">'+fmt(r.rewardAmount)+'</td><td>'+(r.redeemedAt?'<span class="badge">Kiritilgan</span>':(r.isActive?'<span class="badge bad">Kiritilmagan</span>':'<span class="badge bad">Bloklangan</span>'))+'</td><td>'+esc(r.paynetStatus||'-')+'</td></tr>').join('')+'</tbody></table>'}
   async function regionsView(){const rows=await api('/dashboard/api/regions'); el('regions').innerHTML='<div class="panel">'+table(rows)+'</div>'}
   async function paymentsView(){const d=await api('/dashboard/api/payments?'+qs()); el('payments').innerHTML='<div class="panel"><button class="btn danger" onclick="retry()">Failed payout retry</button> <b>Jami: '+fmt(d.total)+'</b></div>'+table(d.rows)}
   async function retry(){if(!confirm('Failed payoutlar qayta yuborilsinmi?'))return; alert(JSON.stringify(await api('/dashboard/api/paynet/retry-failed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),null,2)); load()}
@@ -605,6 +724,12 @@ export async function handleAdminRequest(
 
     if (req.method === "GET" && url.pathname === "/dashboard/api/participants") {
       sendJson(res, 200, await getParticipants(dataSource, url));
+      return true;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/dashboard/api/participants/")) {
+      const telegramId = decodeURIComponent(url.pathname.slice("/dashboard/api/participants/".length));
+      sendJson(res, 200, await getParticipantDetail(dataSource, telegramId));
       return true;
     }
 
