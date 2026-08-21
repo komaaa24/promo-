@@ -26,6 +26,24 @@ function optionalNumber(name: string, fallback: number): number {
   return parsed;
 }
 
+function optionalBoolean(name: string, fallback: boolean): boolean {
+  const value = process.env[name];
+
+  if (!value) {
+    return fallback;
+  }
+
+  if (["1", "true", "yes", "on"].includes(value.toLowerCase())) {
+    return true;
+  }
+
+  if (["0", "false", "no", "off"].includes(value.toLowerCase())) {
+    return false;
+  }
+
+  throw new Error(`Invalid boolean env variable: ${name}`);
+}
+
 export const env = {
   botToken: required("BOT_TOKEN"),
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -36,6 +54,7 @@ export const env = {
   admin: {
     username: process.env.DASH_LOGIN ?? process.env.ADMIN_USERNAME,
     password: process.env.DASH_PASS ?? process.env.ADMIN_PASSWORD,
+    cookieSecure: optionalBoolean("DASH_COOKIE_SECURE", false),
   },
   digitalPay: {
     baseUrl: process.env.DIGITAL_PAY_BASE_URL ?? "https://pay.adigital.uz",

@@ -10,6 +10,9 @@ type QueryParam = string | number | boolean;
 
 const sessionCookie = "promo_dash_session";
 const sessionMaxAgeSeconds = 60 * 60 * 12;
+const loginWindowMs = 10 * 60 * 1000;
+const maxFailedLogins = 5;
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.writeHead(statusCode, {
@@ -30,6 +33,55 @@ function sendHtml(res: ServerResponse, html: string, statusCode = 200): void {
 function redirect(res: ServerResponse, location: string): void {
   res.writeHead(302, { Location: location });
   res.end();
+}
+
+function clientIp(req: IncomingMessage): string {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+  return raw?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+}
+
+function audit(req: IncomingMessage, action: string, context?: Record<string, unknown>): void {
+  logger.info("Dashboard audit", {
+    action,
+    ip: clientIp(req),
+    userAgent: req.headers["user-agent"],
+    ...context,
+  });
+}
+
+function filterKeys(url: URL): string[] {
+  return [...url.searchParams.keys()].filter((key) => key !== "type");
+}
+
+function isLoginLimited(req: IncomingMessage): boolean {
+  const key = clientIp(req);
+  const attempt = loginAttempts.get(key);
+  if (!attempt) {
+    return false;
+  }
+
+  if (Date.now() > attempt.resetAt) {
+    loginAttempts.delete(key);
+    return false;
+  }
+
+  return attempt.count >= maxFailedLogins;
+}
+
+function recordFailedLogin(req: IncomingMessage): void {
+  const key = clientIp(req);
+  const existing = loginAttempts.get(key);
+  if (!existing || Date.now() > existing.resetAt) {
+    loginAttempts.set(key, { count: 1, resetAt: Date.now() + loginWindowMs });
+    return;
+  }
+
+  loginAttempts.set(key, { ...existing, count: existing.count + 1 });
+}
+
+function clearFailedLogins(req: IncomingMessage): void {
+  loginAttempts.delete(clientIp(req));
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -103,14 +155,16 @@ function isAuthenticated(req: IncomingMessage): boolean {
 }
 
 function setSession(res: ServerResponse): void {
+  const secure = env.admin.cookieSecure ? "; Secure" : "";
   res.setHeader(
     "Set-Cookie",
-    `${sessionCookie}=${createSessionCookie()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${sessionMaxAgeSeconds}`,
+    `${sessionCookie}=${createSessionCookie()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionMaxAgeSeconds}${secure}`,
   );
 }
 
 function clearSession(res: ServerResponse): void {
-  res.setHeader("Set-Cookie", `${sessionCookie}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+  const secure = env.admin.cookieSecure ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${sessionCookie}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}`);
 }
 
 function requireDashboardAuth(req: IncomingMessage, res: ServerResponse): boolean {
@@ -177,7 +231,10 @@ function buildFilters(url: URL, aliases: { dateColumn: string; regionColumn?: st
 }
 
 function csvEscape(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
+  let text = value === null || value === undefined ? "" : String(value);
+  if (/^[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
@@ -373,16 +430,24 @@ async function getParticipants(dataSource: DataSource, url: URL): Promise<Record
     clauses.push(`(u."fullName" ILIKE $${params.length} OR u."phone" ILIKE $${params.length} OR u."telegramId"::text ILIKE $${params.length})`);
   }
 
-  const minCodes = Number(url.searchParams.get("minCodes") ?? "");
-  const maxCodes = Number(url.searchParams.get("maxCodes") ?? "");
+  const minCodesParam = url.searchParams.get("minCodes");
+  const maxCodesParam = url.searchParams.get("maxCodes");
   const having: string[] = [];
 
-  if (Number.isInteger(minCodes) && minCodes >= 0) {
+  if (minCodesParam) {
+    const minCodes = Number(minCodesParam);
+    if (!Number.isInteger(minCodes) || minCodes < 0) {
+      throw new Error("Invalid minCodes filter");
+    }
     params.push(minCodes);
     having.push(`COUNT(r."id") >= $${params.length}`);
   }
 
-  if (Number.isInteger(maxCodes) && maxCodes >= 0) {
+  if (maxCodesParam) {
+    const maxCodes = Number(maxCodesParam);
+    if (!Number.isInteger(maxCodes) || maxCodes < 0) {
+      throw new Error("Invalid maxCodes filter");
+    }
     params.push(maxCodes);
     having.push(`COUNT(r."id") <= $${params.length}`);
   }
@@ -718,14 +783,22 @@ async function exportRows(dataSource: DataSource, type: string, url: URL, previe
       clauses.push(`u."step" NOT IN ('MENU', 'ASK_PROMO_CODE')`);
     }
 
-    const minCodes = Number(url.searchParams.get("minCodes") ?? "");
-    const maxCodes = Number(url.searchParams.get("maxCodes") ?? "");
+    const minCodesParam = url.searchParams.get("minCodes");
+    const maxCodesParam = url.searchParams.get("maxCodes");
     const having: string[] = [];
-    if (Number.isInteger(minCodes) && minCodes >= 0) {
+    if (minCodesParam) {
+      const minCodes = Number(minCodesParam);
+      if (!Number.isInteger(minCodes) || minCodes < 0) {
+        throw new Error("Invalid minCodes filter");
+      }
       params.push(minCodes);
       having.push(`COUNT(r."id") >= $${params.length}`);
     }
-    if (Number.isInteger(maxCodes) && maxCodes >= 0) {
+    if (maxCodesParam) {
+      const maxCodes = Number(maxCodesParam);
+      if (!Number.isInteger(maxCodes) || maxCodes < 0) {
+        throw new Error("Invalid maxCodes filter");
+      }
       params.push(maxCodes);
       having.push(`COUNT(r."id") <= $${params.length}`);
     }
@@ -941,18 +1014,29 @@ export async function handleAdminRequest(
     }
 
     if (req.method === "POST" && url.pathname === "/dashboard/login") {
+      if (isLoginLimited(req)) {
+        audit(req, "login_rate_limited");
+        sendHtml(res, loginHtml("Juda ko'p noto'g'ri urinish. 10 daqiqadan keyin qayta urinib ko'ring."), 429);
+        return true;
+      }
+
       const auth = credentials();
       const body = new URLSearchParams(await readBody(req));
       if (!auth || !safeEqual(body.get("login") ?? "", auth.username) || !safeEqual(body.get("password") ?? "", auth.password)) {
+        recordFailedLogin(req);
+        audit(req, "login_failed", { login: body.get("login") ?? "" });
         sendHtml(res, loginHtml("Login yoki parol noto'g'ri"), 401);
         return true;
       }
+      clearFailedLogins(req);
+      audit(req, "login_success", { login: auth.username });
       setSession(res);
       redirect(res, "/dashboard");
       return true;
     }
 
     if (req.method === "POST" && url.pathname === "/dashboard/logout") {
+      audit(req, "logout");
       clearSession(res);
       sendJson(res, 200, { ok: true });
       return true;
@@ -1002,6 +1086,7 @@ export async function handleAdminRequest(
       const body = await readJson(req);
       const redemptionId = typeof body.redemptionId === "string" ? body.redemptionId : undefined;
       const limit = typeof body.limit === "number" ? body.limit : 20;
+      audit(req, "paynet_retry_failed", { redemptionId, limit });
       sendJson(res, 200, await retryFailed(dataSource, redemptionId, limit));
       return true;
     }
@@ -1015,6 +1100,7 @@ export async function handleAdminRequest(
 
     if (req.method === "GET" && url.pathname === "/dashboard/export") {
       const type = url.searchParams.get("type") ?? "codes";
+      audit(req, "export_download", { type, filters: filterKeys(url) });
       sendCsv(res, `${type}.csv`, await exportRows(dataSource, type, url));
       return true;
     }

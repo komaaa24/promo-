@@ -29,7 +29,7 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 function sendJson(res: ServerResponse, statusCode: number, payload: Record<string, unknown>): void {
-  res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.writeHead(statusCode, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify(payload));
 }
 
@@ -42,7 +42,25 @@ export function startCallbackServer(dataSource: DataSource, bot: Bot<BotContext>
     }
 
     if (req.method === "GET" && req.url === "/health") {
-      sendJson(res, 200, { ok: true });
+      try {
+        await dataSource.query("SELECT 1");
+        sendJson(res, 200, {
+          ok: true,
+          database: "ok",
+          uptimeSeconds: Math.round(process.uptime()),
+          time: new Date().toISOString(),
+        });
+      } catch (error) {
+        logger.error("Health check failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        sendJson(res, 503, {
+          ok: false,
+          database: "error",
+          uptimeSeconds: Math.round(process.uptime()),
+          time: new Date().toISOString(),
+        });
+      }
       return;
     }
 

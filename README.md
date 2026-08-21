@@ -59,13 +59,16 @@ http://161.35.219.212:3000/dashboard
 ```env
 DASH_LOGIN=admin
 DASH_PASS=strong-random-password
+DASH_COOKIE_SECURE=true
 ```
 
-Panelda umumiy statistika, dinamik chartlar, ishtirokchilar, promokodlar, hududlar, Paynet statuslari, app loglari, CSV eksport va failed payoutlarni qayta yuborish bor. `DASH_LOGIN` yoki `DASH_PASS` bo'lmasa dashboard o'chirilgan bo'ladi.
+`DASH_COOKIE_SECURE=true` faqat HTTPS orqali ochilganda qo'yiladi. IP orqali oddiy HTTP test qilinayotgan bo'lsa vaqtincha `false` qoldiring.
+
+Panelda dinamik chartlar, ishtirokchilar statistikasi, kiritilgan promokodlar, hududlar, Paynet statuslari, CSV eksport preview/yuklab olish va failed payoutlarni qayta yuborish bor. `DASH_LOGIN` yoki `DASH_PASS` bo'lmasa dashboard o'chirilgan bo'ladi.
 
 ## Promokodlar
 
-Promokodlar bazada ochiq ko'rinishda saqlanmaydi. Import paytida har bir kod `PROMO_CODE_SECRET` bilan HMAC-SHA256 hash qilinadi, DB’da faqat hash va audit uchun oxirgi 4 belgi saqlanadi.
+Promokodlar bazada qidiruv uchun HMAC-SHA256 hash qilinadi. Dashboardda to'liq kod ko'rinishi uchun import paytida kod `PROMO_CODE_SECRET` dan olingan kalit bilan shifrlangan holda ham saqlanadi. Eski importlarda to'liq kod ko'rinmasa, migrationdan keyin Excelni qayta import qiling.
 
 ```env
 PROMO_CODE_SECRET=kamida-32-belgili-random-secret
@@ -110,6 +113,14 @@ pm2 start ecosystem.config.js
 pm2 save
 ```
 
+Health check:
+
+```bash
+curl http://127.0.0.1:3000/health
+```
+
+`ok: true` va `database: "ok"` chiqishi kerak.
+
 Holat va loglarni ko'rish:
 
 ```bash
@@ -128,13 +139,16 @@ pm2 restart promo-bot
 
 Productionda TypeORM `synchronize` o'chirilgan. Jadvallar faqat migration orqali boshqariladi.
 
-Productionda tavsiya:
+Production checklist:
 
 - `.env` faylini gitga qo'shmang.
-- Telegram, Digital Pay, Postgres va server root parollarini alohida saqlang.
+- Telegram bot token, Digital Pay token/parol, Postgres parol va server root parolini hech kimga yubormang; chatga tushgan bo'lsa rotate qiling.
+- Domain va HTTPS qo'ying, keyin `PUBLIC_BASE_URL=https://your-domain.uz` va `DASH_COOKIE_SECURE=true` qiling.
 - `DIGITAL_PAY_TIMEOUT_MS=15000` yoki undan yuqori qiling.
 - Kunlik Postgres backup qo'ying.
-- `pm2 logs promo-bot` va `/dashboard` panelni muntazam tekshiring.
+- `/health`, `pm2 ls`, `pm2 logs promo-bot` va `/dashboard` panelni muntazam tekshiring.
+- Failed/Pending Paynet bo'lsa avval sababini ko'ring, keyin dashboarddan retry qiling.
+- Katta eksportlar uchun avval preview qiling, keyin CSV yuklab oling.
 
 ## Flow
 
