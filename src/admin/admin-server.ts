@@ -687,13 +687,35 @@ async function retryFailed(dataSource: DataSource, redemptionId?: string, limit 
 
 async function exportRows(dataSource: DataSource, type: string, url: URL): Promise<Array<Record<string, unknown>>> {
   if (type === "participants") {
-    const filters = buildFilters(url, { dateColumn: 'u."createdAt"', regionColumn: 'u."address"', statusColumn: 'u."step"' });
-    const params = [...filters.params];
-    const clauses = filters.where ? [filters.where.slice("WHERE ".length)] : [];
+    const params: QueryParam[] = [];
+    const joinClauses: string[] = ['r."userId" = u."id"'];
+    const clauses: string[] = [];
     const q = url.searchParams.get("q");
+    const region = url.searchParams.get("region");
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
+    const status = url.searchParams.get("status");
+
     if (q) {
       params.push(`%${q}%`);
       clauses.push(`(u."fullName" ILIKE $${params.length} OR u."phone" ILIKE $${params.length} OR u."telegramId"::text ILIKE $${params.length})`);
+    }
+    if (region) {
+      params.push(`%${region}%`);
+      clauses.push(`u."address" ILIKE $${params.length}`);
+    }
+    if (from) {
+      params.push(from);
+      joinClauses.push(`r."createdAt" >= $${params.length}::date`);
+    }
+    if (to) {
+      params.push(to);
+      joinClauses.push(`r."createdAt" < ($${params.length}::date + interval '1 day')`);
+    }
+    if (status === "active") {
+      clauses.push(`u."step" IN ('MENU', 'ASK_PROMO_CODE')`);
+    } else if (status === "blocked") {
+      clauses.push(`u."step" NOT IN ('MENU', 'ASK_PROMO_CODE')`);
     }
 
     const minCodes = Number(url.searchParams.get("minCodes") ?? "");
@@ -709,6 +731,7 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
     }
 
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const redemptionJoin = joinClauses.join(" AND ");
     const havingSql = having.length ? `HAVING ${having.join(" AND ")}` : "";
     return dataSource.query(
       `
@@ -717,19 +740,22 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
           u."fullName" AS "ism_familiya",
           u."phone" AS "telefon",
           u."address" AS "hudud",
-          u."language" AS "til",
-          u."step" AS "holat",
+          CASE
+            WHEN u."step" IN ('MENU', 'ASK_PROMO_CODE') THEN 'faol'
+            ELSE 'bloklangan_yoki_tugallanmagan'
+          END AS "holat",
           u."createdAt" AS "royxatdan_otgan",
           COUNT(r."id")::int AS "promokodlar_soni",
           COALESCE(SUM(r."rewardAmount"), 0)::int AS "yutuq_summa",
+          MAX(r."createdAt") AS "oxirgi_promokod_vaqti",
           COUNT(p."id") FILTER (WHERE p."status" = 'failed')::int AS "failed_paynet"
         FROM "telegram_users" u
-        LEFT JOIN "promo_code_redemptions" r ON r."userId" = u."id"
-        LEFT JOIN "paynet_transactions" p ON p."userId" = u."id"
+        LEFT JOIN "promo_code_redemptions" r ON ${redemptionJoin}
+        LEFT JOIN "paynet_transactions" p ON p."promoCodeRedemptionId" = r."id"
         ${where}
         GROUP BY u."id"
         ${havingSql}
-        ORDER BY u."createdAt" DESC
+        ORDER BY "promokodlar_soni" DESC, u."createdAt" DESC
       `,
       params,
     );
@@ -873,8 +899,9 @@ function dashboardHtml(): string {
   async function regionsView(){const rows=await api('/dashboard/api/regions'); el('regions').innerHTML='<div class="panel">'+table(rows)+'</div>'}
   async function paymentsView(){const d=await api('/dashboard/api/payments?'+qs()); el('payments').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Paynet tranzaksiyalari, provider javoblari va xatolar nazorati.</div></div><button class="btn danger" onclick="retryFailedPaynet()">Failed payout retry</button></div></div>'+table(d.rows)}
   async function retryFailedPaynet(){if(!confirm('Failed payoutlar qayta yuborilsinmi?'))return; const result=await api('/dashboard/api/paynet/retry-failed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); alert(JSON.stringify(result,null,2)); load()}
-  function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Yuqoridagi qidirish, hudud va sana filtrlariga qarab CSV tayyorlanadi. Ism, telefon, user ID yoki promokod yozib yuklab olish mumkin.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Status</label><select id="exportStatus"><option value="">Hammasi</option><option value="winner">Yutuqli promokodlar</option><option value="available">Kiritilmagan promokodlar</option><option value="blocked">Bloklangan promokodlar</option></select><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div class="panel"><h3>Yuklab olish</h3><p>Eksport real bazadan olinadi. Yangi import qilingan promokodlar to‘liq ko‘rinadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'}
-  function downloadExport(){const p=new URLSearchParams(qs()); const type=el('exportType').value; const status=el('exportStatus').value; const min=el('exportMinCodes').value; if(status)p.set('status',status); if(min)p.set('minCodes',min); location='/dashboard/export?type='+encodeURIComponent(type)+'&'+p.toString()}
+  function syncExportStatus(){const type=el('exportType').value; const status=el('exportStatus'); if(type==='participants'){status.innerHTML='<option value="">Hammasi</option><option value="active">Faol</option><option value="blocked">Bloklangan / tugallanmagan</option>'}else if(type==='codes'){status.innerHTML='<option value="">Hammasi</option><option value="used">Kiritilgan</option><option value="winner">Yutuqli</option><option value="available">Kiritilmagan</option><option value="blocked">Bloklangan</option>'}else{status.innerHTML='<option value="">Hammasi</option>';}}
+  function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Hudud, sana oraligi, holat va promokodlar soni bo‘yicha saralab CSV yuklab olinadi.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Qidirish</label><input id="exportQ" placeholder="Ism, telefon, user ID yoki promokod"/><label>Hudud</label><select id="exportRegion"></select><div class="grid2"><div><label>Sanadan</label><input id="exportFrom" type="date"/></div><div><label>Sanagacha</label><input id="exportTo" type="date"/></div></div><label>Holat</label><select id="exportStatus"></select><div class="grid2"><div><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div><label>Promokodlar soni ko‘pi bilan</label><input id="exportMaxCodes" type="number" min="0" placeholder="Masalan: 10"/></div></div></div><div class="panel"><h3>Yuklab olish</h3><p>Ishtirokchilar eksportida har bir user uchun nechta promokod kiritgani, qaysi hududdanligi, holati, telefon raqami, ro‘yxatdan o‘tgan va oxirgi promokod vaqti chiqadi.</p><p>Kiritilgan promokodlar eksportida promokod, user, hudud, sana, yutuq, Paynet va xato ma’lumotlari chiqadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'; el('exportRegion').innerHTML=el('region').innerHTML; el('exportQ').value=el('q').value; el('exportRegion').value=el('region').value; el('exportFrom').value=el('from').value; el('exportTo').value=el('to').value; el('exportType').onchange=syncExportStatus; syncExportStatus()}
+  function downloadExport(){const type=el('exportType').value; const p=new URLSearchParams(); const q=el('exportQ').value, region=el('exportRegion').value, from=el('exportFrom').value, to=el('exportTo').value, status=el('exportStatus').value, min=el('exportMinCodes').value, max=el('exportMaxCodes').value; if(q)p.set('q',q); if(region)p.set('region',region); if(from)p.set('from',from); if(to)p.set('to',to); if(status)p.set('status',status); if(min)p.set('minCodes',min); if(max)p.set('maxCodes',max); location='/dashboard/export?type='+encodeURIComponent(type)+'&'+p.toString()}
   setInterval(()=>el('clock').textContent=new Date().toLocaleTimeString(),1000); setInterval(()=>load().catch(()=>{}),30000); load();
   </script></body></html>`;
 }
