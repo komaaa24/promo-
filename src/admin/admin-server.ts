@@ -685,7 +685,7 @@ async function retryFailed(dataSource: DataSource, redemptionId?: string, limit 
   return { requested: rows.length, results };
 }
 
-async function exportRows(dataSource: DataSource, type: string, url: URL): Promise<Array<Record<string, unknown>>> {
+async function exportRows(dataSource: DataSource, type: string, url: URL, previewLimit?: number): Promise<Array<Record<string, unknown>>> {
   if (type === "participants") {
     const params: QueryParam[] = [];
     const joinClauses: string[] = ['r."userId" = u."id"'];
@@ -733,6 +733,7 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const redemptionJoin = joinClauses.join(" AND ");
     const havingSql = having.length ? `HAVING ${having.join(" AND ")}` : "";
+    const limitSql = previewLimit ? `LIMIT ${previewLimit}` : "";
     return dataSource.query(
       `
         SELECT
@@ -756,13 +757,15 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
         GROUP BY u."id"
         ${havingSql}
         ORDER BY "promokodlar_soni" DESC, u."createdAt" DESC
+        ${limitSql}
       `,
       params,
     );
   }
 
   if (type === "regions") {
-    return getRegions(dataSource, url);
+    const rows = await getRegions(dataSource, url);
+    return previewLimit ? rows.slice(0, previewLimit) : rows;
   }
 
   const params: QueryParam[] = [];
@@ -800,6 +803,7 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
   }
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const limitSql = previewLimit ? `LIMIT ${previewLimit}` : "";
   const rows = await dataSource.query(
     `
       SELECT
@@ -826,6 +830,7 @@ async function exportRows(dataSource: DataSource, type: string, url: URL): Promi
       LEFT JOIN "paynet_transactions" p ON p."promoCodeRedemptionId" = r."id"
       ${where}
       ORDER BY c."updatedAt" DESC
+      ${limitSql}
     `,
     params,
   );
@@ -871,14 +876,14 @@ function dashboardHtml(): string {
   </style></head><body><div class="app"><aside><div class="brand">Promo</div><div class="sub">BOSHQARUV PANELI</div><nav>
   <button class="active" data-view="participants">Ishtirokchilar</button><button data-view="codes">Kiritilgan promokodlar</button><button data-view="regions">Hududlar</button><button data-view="payments">Paynet</button><button data-view="export">Eksport</button>
   </nav><div class="user"><div class="avatar">A</div><div><b>Admin</b><div class="muted">Boshqaruvchi</div></div></div></aside><section><header><div class="title" id="pageTitle">Ishtirokchilar</div><div class="status"><span><i class="dot"></i> Jonli <b id="clock"></b></span><span>Yangilandi: <b id="updated">-</b></span><button class="btn ghost" onclick="logout()">Chiqish</button></div></header><main>
-  <div class="filters"><div id="searchFilter" class="hidden"><label>QIDIRISH</label><input id="q" placeholder="Ism, telefon, user ID yoki promokod"/></div><div><label>HUDUD</label><select id="region"><option value="">Barcha hududlar</option><option>Andijon viloyati</option><option>Buxoro viloyati</option><option>Farg'ona viloyati</option><option>Jizzax viloyati</option><option>Xorazm viloyati</option><option>Namangan viloyati</option><option>Navoiy viloyati</option><option>Qashqadaryo viloyati</option><option>Samarqand viloyati</option><option>Sirdaryo viloyati</option><option>Surxondaryo viloyati</option><option>Toshkent viloyati</option><option>Toshkent shahri</option><option>Qoraqalpog'iston</option></select></div><div><label>SANADAN</label><input id="from" type="date"/></div><div><label>SANAGACHA</label><input id="to" type="date"/></div><div class="actions"><button class="btn" onclick="load()">Qo'llash</button><button class="btn secondary" onclick="clearFilters()">Tozalash</button></div></div>
+  <div id="globalFilters" class="filters"><div id="searchFilter" class="hidden"><label>QIDIRISH</label><input id="q" placeholder="Ism, telefon, user ID yoki promokod"/></div><div><label>HUDUD</label><select id="region"><option value="">Barcha hududlar</option><option>Andijon viloyati</option><option>Buxoro viloyati</option><option>Farg'ona viloyati</option><option>Jizzax viloyati</option><option>Xorazm viloyati</option><option>Namangan viloyati</option><option>Navoiy viloyati</option><option>Qashqadaryo viloyati</option><option>Samarqand viloyati</option><option>Sirdaryo viloyati</option><option>Surxondaryo viloyati</option><option>Toshkent viloyati</option><option>Toshkent shahri</option><option>Qoraqalpog'iston</option></select></div><div><label>SANADAN</label><input id="from" type="date"/></div><div><label>SANAGACHA</label><input id="to" type="date"/></div><div class="actions"><button class="btn" onclick="load()">Qo'llash</button><button class="btn secondary" onclick="clearFilters()">Tozalash</button></div></div>
   <div id="overview" class="view hidden"></div><div id="participants" class="view"></div><div id="codes" class="view hidden"></div><div id="regions" class="view hidden"></div><div id="payments" class="view hidden"></div><div id="export" class="view hidden"></div>
   </main></section></div><div id="modal" class="modal hidden"></div><script>
   const el=id=>document.getElementById(id);
   let current='participants'; const titles={overview:'Boshqaruv paneli',participants:'Ishtirokchilar',codes:'Kiritilgan promokodlar',regions:'Hududlar',payments:'Paynet nazorati',export:'Eksport'};
   let codesMode='used'; let codesStatus=''; let chartGroup='day'; const fmt=n=>Number(n||0).toLocaleString('ru-RU'); const kpi=v=>typeof v==='string'?v:fmt(v); const esc=v=>String(v??'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); const qs=(withSearch=true)=>{const p=new URLSearchParams({region:el('region').value,from:el('from').value,to:el('to').value}); if(withSearch)p.set('q',el('q').value); return p.toString()}; const statsQs=(withSearch=true)=>{const p=new URLSearchParams(qs(withSearch)); p.set('group',chartGroup); return p.toString()};
   async function api(path,opt){const r=await fetch(path,opt); if(r.status===401) location='/dashboard/login'; if(!r.ok) throw new Error(await r.text()); return r.json()}
-  function syncFilters(){el('searchFilter').classList.toggle('hidden',current==='participants')} function setView(v){current=v; syncFilters(); document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v)); document.querySelectorAll('.view').forEach(e=>e.classList.add('hidden')); el(v).classList.remove('hidden'); el('pageTitle').textContent=titles[v]; load()}
+  function syncFilters(){el('globalFilters').classList.toggle('hidden',current==='export'); el('searchFilter').classList.toggle('hidden',current==='participants')} function setView(v){current=v; syncFilters(); document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v)); document.querySelectorAll('.view').forEach(e=>e.classList.add('hidden')); el(v).classList.remove('hidden'); el('pageTitle').textContent=titles[v]; load()}
   document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>setView(b.dataset.view)); function clearFilters(){el('q').value='';el('region').value='';el('from').value='';el('to').value='';load()} function logout(){fetch('/dashboard/logout',{method:'POST'}).then(()=>location='/dashboard/login')}
   function table(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; const keys=Object.keys(rows[0]); return '<table><thead><tr>'+keys.map(k=>'<th>'+esc(k)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(r[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}
   function date(v){return v?new Date(v).toLocaleString('ru-RU'):''} function day(v){return v?new Date(v).toLocaleDateString('ru-RU'):'-'} function time(v){return v?new Date(v).toLocaleTimeString('ru-RU'):'-'} function shortId(v){return v?String(v).slice(0,8):'-'} function statusBadge(v,ok='Kiritilgan'){return v?'<span class="badge">'+esc(ok)+'</span>':'<span class="badge bad">-</span>'} function paynetBadge(v){if(!v)return '-'; return '<span class="badge '+(v==='failed'?'bad':'')+'">'+esc(v)+'</span>'}
@@ -900,8 +905,11 @@ function dashboardHtml(): string {
   async function paymentsView(){const d=await api('/dashboard/api/payments?'+qs()); el('payments').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Paynet tranzaksiyalari, provider javoblari va xatolar nazorati.</div></div><button class="btn danger" onclick="retryFailedPaynet()">Failed payout retry</button></div></div>'+table(d.rows)}
   async function retryFailedPaynet(){if(!confirm('Failed payoutlar qayta yuborilsinmi?'))return; const result=await api('/dashboard/api/paynet/retry-failed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); alert(JSON.stringify(result,null,2)); load()}
   function syncExportStatus(){const type=el('exportType').value; const status=el('exportStatus'); if(type==='participants'){status.innerHTML='<option value="">Hammasi</option><option value="active">Faol</option><option value="blocked">Bloklangan / tugallanmagan</option>'}else if(type==='codes'){status.innerHTML='<option value="">Hammasi</option><option value="used">Kiritilgan</option><option value="winner">Yutuqli</option><option value="available">Kiritilmagan</option><option value="blocked">Bloklangan</option>'}else{status.innerHTML='<option value="">Hammasi</option>';}}
-  function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Hudud, sana oraligi, holat va promokodlar soni bo‘yicha saralab CSV yuklab olinadi.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Qidirish</label><input id="exportQ" placeholder="Ism, telefon, user ID yoki promokod"/><label>Hudud</label><select id="exportRegion"></select><div class="grid2"><div><label>Sanadan</label><input id="exportFrom" type="date"/></div><div><label>Sanagacha</label><input id="exportTo" type="date"/></div></div><label>Holat</label><select id="exportStatus"></select><div class="grid2"><div><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div><label>Promokodlar soni ko‘pi bilan</label><input id="exportMaxCodes" type="number" min="0" placeholder="Masalan: 10"/></div></div></div><div class="panel"><h3>Yuklab olish</h3><p>Ishtirokchilar eksportida har bir user uchun nechta promokod kiritgani, qaysi hududdanligi, holati, telefon raqami, ro‘yxatdan o‘tgan va oxirgi promokod vaqti chiqadi.</p><p>Kiritilgan promokodlar eksportida promokod, user, hudud, sana, yutuq, Paynet va xato ma’lumotlari chiqadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'; el('exportRegion').innerHTML=el('region').innerHTML; el('exportQ').value=el('q').value; el('exportRegion').value=el('region').value; el('exportFrom').value=el('from').value; el('exportTo').value=el('to').value; el('exportType').onchange=syncExportStatus; syncExportStatus()}
-  function downloadExport(){const type=el('exportType').value; const p=new URLSearchParams(); const q=el('exportQ').value, region=el('exportRegion').value, from=el('exportFrom').value, to=el('exportTo').value, status=el('exportStatus').value, min=el('exportMinCodes').value, max=el('exportMaxCodes').value; if(q)p.set('q',q); if(region)p.set('region',region); if(from)p.set('from',from); if(to)p.set('to',to); if(status)p.set('status',status); if(min)p.set('minCodes',min); if(max)p.set('maxCodes',max); location='/dashboard/export?type='+encodeURIComponent(type)+'&'+p.toString()}
+  function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Hudud, sana oraligi, holat va promokodlar soni bo‘yicha saralab natija ko‘riladi va CSV yuklab olinadi.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Qidirish</label><input id="exportQ" placeholder="Ism, telefon, telegram ID yoki promokod"/><label>Hudud</label><select id="exportRegion"></select><div class="grid2"><div><label>Sanadan</label><input id="exportFrom" type="date"/></div><div><label>Sanagacha</label><input id="exportTo" type="date"/></div></div><label>Holat</label><select id="exportStatus"></select><div class="grid2"><div><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div><label>Promokodlar soni ko‘pi bilan</label><input id="exportMaxCodes" type="number" min="0" placeholder="Masalan: 10"/></div></div><div class="actions" style="margin-top:16px"><button class="btn" onclick="previewExport()">Natijani ko‘rish</button><button class="btn secondary" onclick="clearExportFilters()">Tozalash</button></div></div><div class="panel"><h3>Yuklab olish</h3><p>Ishtirokchilar eksportida user ID, ism familiya, telefon, hudud, holat, ro‘yxatdan o‘tgan sana, promokodlar soni, yutuq summa va oxirgi promokod vaqti chiqadi.</p><p>Kiritilgan promokodlar eksportida promokod, user, hudud, sana, yutuq, Paynet va xato ma’lumotlari chiqadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div><div id="exportResult"></div>'; el('exportRegion').innerHTML=el('region').innerHTML; el('exportQ').value=el('q').value; el('exportRegion').value=el('region').value; el('exportFrom').value=el('from').value; el('exportTo').value=el('to').value; el('exportType').onchange=()=>{syncExportStatus(); el('exportResult').innerHTML=''}; syncExportStatus()}
+  function exportParams(){const p=new URLSearchParams(); const q=el('exportQ').value.trim(), region=el('exportRegion').value, from=el('exportFrom').value, to=el('exportTo').value, status=el('exportStatus').value, min=el('exportMinCodes').value, max=el('exportMaxCodes').value; if(q)p.set('q',q); if(region)p.set('region',region); if(from)p.set('from',from); if(to)p.set('to',to); if(status)p.set('status',status); if(min)p.set('minCodes',min); if(max)p.set('maxCodes',max); return p}
+  function clearExportFilters(){el('exportQ').value=''; el('exportRegion').value=''; el('exportFrom').value=''; el('exportTo').value=''; el('exportStatus').value=''; el('exportMinCodes').value=''; el('exportMaxCodes').value=''; el('exportResult').innerHTML=''}
+  async function previewExport(){const type=el('exportType').value; const p=exportParams(); el('exportResult').innerHTML='<div class="panel muted">Natija yuklanmoqda...</div>'; const d=await api('/dashboard/api/export-preview?type='+encodeURIComponent(type)+'&'+p.toString()); const note=d.limited?'<div class="hint">Jadvalda birinchi 100 qator ko‘rsatildi. To‘liq ro‘yxat uchun CSV yuklab oling.</div>':''; el('exportResult').innerHTML='<div class="panel"><div class="panel-head"><div><b>Natija: '+fmt(d.total)+(d.limited?'+':'')+'</b>'+note+'</div><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'+table(d.rows)}
+  function downloadExport(){const type=el('exportType').value; const p=exportParams(); location='/dashboard/export?type='+encodeURIComponent(type)+'&'+p.toString()}
   setInterval(()=>el('clock').textContent=new Date().toLocaleTimeString(),1000); setInterval(()=>load().catch(()=>{}),30000); load();
   </script></body></html>`;
 }
@@ -995,6 +1003,13 @@ export async function handleAdminRequest(
       const redemptionId = typeof body.redemptionId === "string" ? body.redemptionId : undefined;
       const limit = typeof body.limit === "number" ? body.limit : 20;
       sendJson(res, 200, await retryFailed(dataSource, redemptionId, limit));
+      return true;
+    }
+
+    if (req.method === "GET" && url.pathname === "/dashboard/api/export-preview") {
+      const type = url.searchParams.get("type") ?? "participants";
+      const rows = await exportRows(dataSource, type, url, 100);
+      sendJson(res, 200, { total: rows.length, limited: rows.length === 100, rows });
       return true;
     }
 
