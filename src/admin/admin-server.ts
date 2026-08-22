@@ -14,6 +14,28 @@ const loginWindowMs = 10 * 60 * 1000;
 const maxFailedLogins = 5;
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 
+function normalizeBasePath(value: string | undefined): string {
+  const raw = (value || "/dashboard").trim();
+  const withSlash = raw.startsWith("/") ? raw : `/${raw}`;
+  const normalized = withSlash.replace(/\/+$/, "");
+  return normalized || "/dashboard";
+}
+
+const dashboardBasePath = normalizeBasePath(env.admin.basePath);
+const dashboardApiPath = `${dashboardBasePath}/api`;
+const dashboardLoginPath = `${dashboardBasePath}/login`;
+const dashboardLogoutPath = `${dashboardBasePath}/logout`;
+const dashboardExportPath = `${dashboardBasePath}/export`;
+const dashboardParticipantDetailPath = `${dashboardApiPath}/participants/`;
+
+function isDashboardPath(pathname: string): boolean {
+  return pathname === dashboardBasePath || pathname.startsWith(`${dashboardBasePath}/`);
+}
+
+function dashboardPath(path = ""): string {
+  return `${dashboardBasePath}${path}`;
+}
+
 function sendJson(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.writeHead(statusCode, {
     "Content-Type": "application/json",
@@ -174,12 +196,12 @@ function requireDashboardAuth(req: IncomingMessage, res: ServerResponse): boolea
   }
 
   if (!isAuthenticated(req)) {
-    if (req.url?.startsWith("/dashboard/api")) {
+    if (req.url?.startsWith(dashboardApiPath)) {
       sendJson(res, 401, { ok: false, message: "Unauthorized" });
       return false;
     }
 
-    redirect(res, "/dashboard/login");
+    redirect(res, dashboardLoginPath);
     return false;
   }
 
@@ -950,7 +972,7 @@ function loginHtml(error = ""): string {
   input{width:100%;box-sizing:border-box;height:42px;border:1px solid #d1d5db;border-radius:7px;padding:0 12px;font-size:15px}
   button{width:100%;height:44px;margin-top:20px;border:0;border-radius:7px;background:#3159c9;color:white;font-weight:700;font-size:15px}
   .error{background:#fee2e2;color:#991b1b;border-radius:7px;padding:10px;margin-bottom:12px;font-size:14px}
-  </style></head><body><form method="post" action="/dashboard/login"><h1>Promo Panel</h1><p>Boshqaruv tizimiga kirish</p>${error ? `<div class="error">${error}</div>` : ""}<label>LOGIN</label><input name="login" autocomplete="username" required/><label>PAROL</label><input name="password" type="password" autocomplete="current-password" required/><button>Kirish</button></form></body></html>`;
+  </style></head><body><form method="post" action="${dashboardLoginPath}"><h1>Promo Panel</h1><p>Boshqaruv tizimiga kirish</p>${error ? `<div class="error">${error}</div>` : ""}<label>LOGIN</label><input name="login" autocomplete="username" required/><label>PAROL</label><input name="password" type="password" autocomplete="current-password" required/><button>Kirish</button></form></body></html>`;
 }
 
 function disabledHtml(): string {
@@ -977,11 +999,12 @@ function dashboardHtml(): string {
   <div id="overview" class="view"></div><div id="participants" class="view hidden"></div><div id="codes" class="view hidden"></div><div id="regions" class="view hidden"></div><div id="payments" class="view hidden"></div><div id="export" class="view hidden"></div>
   </main></section></div><div id="modal" class="modal hidden"></div><script>
   const el=id=>document.getElementById(id);
+  const DASH_BASE=${JSON.stringify(dashboardBasePath)}; const dashPath=p=>DASH_BASE+p;
   let current='overview'; const titles={overview:'Boshqaruv paneli',participants:'Ishtirokchilar',codes:'Kiritilgan promokodlar',regions:'Hududlar',payments:'Paynet nazorati',export:'Eksport'};
   let codesMode='used'; let codesStatus=''; let chartGroup='day'; let participantCodeFilter=''; let participantStatus=''; const fmt=n=>Number(n||0).toLocaleString('ru-RU'); const kpi=v=>typeof v==='string'?v:fmt(v); const esc=v=>String(v??'').replace(/[&<>"]/g,s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); const qs=(withSearch=true)=>{const p=new URLSearchParams({region:el('region').value,from:el('from').value,to:el('to').value}); if(withSearch)p.set('q',el('q').value); return p.toString()}; const statsQs=(withSearch=true)=>{const p=new URLSearchParams(qs(withSearch)); p.set('group',chartGroup); return p.toString()};
-  async function api(path,opt){const r=await fetch(path,opt); if(r.status===401) location='/dashboard/login'; if(!r.ok) throw new Error(await r.text()); return r.json()}
+  async function api(path,opt){const r=await fetch(path,opt); if(r.status===401) location=dashPath('/login'); if(!r.ok) throw new Error(await r.text()); return r.json()}
   function syncFilters(){el('globalFilters').classList.toggle('hidden',current==='export'); el('searchFilter').classList.toggle('hidden',current==='overview')} function setView(v){current=v; syncFilters(); document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===v)); document.querySelectorAll('.view').forEach(e=>e.classList.add('hidden')); el(v).classList.remove('hidden'); el('pageTitle').textContent=titles[v]; load()}
-  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>setView(b.dataset.view)); function clearFilters(){el('q').value='';el('region').value='';el('from').value='';el('to').value='';participantCodeFilter='';participantStatus='';load()} function logout(){fetch('/dashboard/logout',{method:'POST'}).then(()=>location='/dashboard/login')}
+  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>setView(b.dataset.view)); function clearFilters(){el('q').value='';el('region').value='';el('from').value='';el('to').value='';participantCodeFilter='';participantStatus='';load()} function logout(){fetch(dashPath('/logout'),{method:'POST'}).then(()=>location=dashPath('/login'))}
   function table(rows){if(!rows.length)return '<div class="panel muted">Malumot yoq</div>'; const keys=Object.keys(rows[0]); return '<table><thead><tr>'+keys.map(k=>'<th>'+esc(k)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(r[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}
   function date(v){return v?new Date(v).toLocaleString('ru-RU'):''} function day(v){return v?new Date(v).toLocaleDateString('ru-RU'):'-'} function time(v){return v?new Date(v).toLocaleTimeString('ru-RU'):'-'} function shortId(v){return v?String(v).slice(0,8):'-'} function statusBadge(v,ok='Kiritilgan'){return v?'<span class="badge">'+esc(ok)+'</span>':'<span class="badge bad">-</span>'} function paynetBadge(v){if(!v)return '-'; return '<span class="badge '+(v==='failed'?'bad':'')+'">'+esc(v)+'</span>'}
   function emptyChart(x,w,h){x.fillStyle='#6b7280';x.font='24px Arial';x.textAlign='center';x.fillText('Malumot yoq',w/2,h/2)}
@@ -991,27 +1014,27 @@ function dashboardHtml(): string {
   function horizontalChart(id,rows,color,labelKey='region',valueKey='redemptions'){setTimeout(()=>{const c=el(id),x=c.getContext('2d'),ratio=window.devicePixelRatio||1,w=c.width=c.clientWidth*ratio,h=c.height=c.clientHeight*ratio,l=230,t=42,r=70,b=32,data=rows.slice(0,12).map(v=>({label:String(v[labelKey]||'-'),value:Number(v[valueKey]||0)})),max=Math.max(1,...data.map(v=>v.value));x.clearRect(0,0,w,h);if(!data.length){emptyChart(x,w,h);return}const row=(h-t-b)/Math.max(data.length,1),barH=Math.min(row*.52,28);x.strokeStyle='#edf0f3';x.lineWidth=1;data.forEach((v,i)=>{let y=t+i*row+row/2-barH/2,bw=(w-l-r)*v.value/max;x.fillStyle='#60656f';x.font='18px Arial';x.textAlign='right';x.fillText(v.label.slice(0,24),l-16,y+barH*.75);x.fillStyle=color;x.beginPath();x.roundRect(l,y,bw,barH,12);x.fill();x.fillStyle='#3159c9';x.font='bold 18px Arial';x.textAlign='left';x.fillText(fmt(v.value),l+bw+8,y+barH*.75)});},30)}
   async function load(){try{el('updated').textContent=new Date().toLocaleString(); if(current==='overview')return overviewView(); if(current==='participants')return participantsView(); if(current==='codes')return codesView(); if(current==='regions')return regionsView(); if(current==='payments')return paymentsView(); if(current==='export')return exportView()}catch(e){el(current).innerHTML='<div class="panel"><b>Xatolik:</b> '+esc(e.message)+'</div>'}}
   function chartTabs(color){return '<div class="tabs"><button class="tab '+(chartGroup==='day'?'active '+color:'')+'" data-chart-group="day">Kunlik</button><button class="tab '+(chartGroup==='month'?'active '+color:'')+'" data-chart-group="month">Oylik</button></div>'} function bindChartTabs(){document.querySelectorAll('[data-chart-group]').forEach(b=>b.onclick=()=>{chartGroup=b.dataset.chartGroup;load()})}
-  async function overviewView(){const d=await api('/dashboard/api/overview?'+statsQs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3>'+chartTabs('red')+'</div><canvas class="chart" id="redChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3>'+chartTabs('blue')+'</div><canvas class="chart" id="userChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3>'+chartTabs('green')+'</div><canvas class="chart wide" id="wideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="regionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta kiritganlar, 3-5 marta kiritganlar</div><canvas class="chart tall" id="bucketChart"></canvas></div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9'); lineChart('wideUserChart',d.dailyUsers,'#0ca750'); horizontalChart('regionChart',d.regionStats,'#c4002f','region','redemptions'); barChart('bucketChart',d.codeBuckets,'#3159c9','bucket','users'); bindChartTabs()}
+  async function overviewView(){const d=await api(dashPath('/api/overview?')+statsQs()); const s=d.summary; el('overview').innerHTML='<div class="kpis">'+[['Jami obunachilar',s.users,'Start bosganlar'],['Bugungi obunachilar',s.todayUsers,'Bugun royxatdan otgan'],['Jami promokodlar',s.totalCodes,'Import qilingan'],['Yutuqli promokodlar',s.winnerCodes,'Pul tushadigan promokodlar'],['Bugungi promokodlar',s.todayRedemptions,'Bugun kiritilgan'],['Ishtirokchilar',s.uniqueParticipants,'Promokod kiritgan userlar'],['Mavjud yutuqlar',s.availableWinnerCodes,'Hali ishlatilmagan'],['Failed/Pending',s.failedPayouts+' / '+s.pendingPayments,'Operator nazorati']].map((a,i)=>'<div class="card '+(i===7?'hot':'')+'"><div class="label">'+a[0]+'</div><div class="value">'+kpi(a[1])+'</div><div class="hint">'+a[2]+'</div></div>').join('')+'</div><div class="grid2" style="margin-top:22px"><div class="panel"><div class="panel-head"><h3>Promokodlar dinamikasi</h3>'+chartTabs('red')+'</div><canvas class="chart" id="redChart"></canvas></div><div class="panel"><div class="panel-head"><h3>Yangi ishtirokchilar</h3>'+chartTabs('blue')+'</div><canvas class="chart" id="userChart"></canvas></div></div><div class="panel"><div class="panel-head"><h3>Obunachilar dinamikasi</h3>'+chartTabs('green')+'</div><canvas class="chart wide" id="wideUserChart"></canvas></div><div class="grid2"><div class="panel"><div class="panel-head"><h3>Hududlar boyicha</h3><div class="tabs"><button class="tab active red">Promokodlar soni</button></div></div><canvas class="chart tall" id="regionChart"></canvas></div><div class="panel"><h3>Promokodlar soni boyicha ishtirokchilar</h3><div class="hint">Masalan: 1 marta kiritganlar, 3-5 marta kiritganlar</div><canvas class="chart tall" id="bucketChart"></canvas></div></div>'; lineChart('redChart',d.dailyRedemptions,'#c4002f'); lineChart('userChart',d.dailyUsers,'#3159c9'); lineChart('wideUserChart',d.dailyUsers,'#0ca750'); horizontalChart('regionChart',d.regionStats,'#c4002f','region','redemptions'); barChart('bucketChart',d.codeBuckets,'#3159c9','bucket','users'); bindChartTabs()}
   function regionBars(rows){const max=Math.max(1,...rows.map(r=>Number(r.redemptions))); return '<table><tbody>'+rows.map(r=>'<tr><td><b>'+esc(r.region)+'</b></td><td>'+fmt(r.users)+'</td><td class="money">'+fmt(r.redemptions)+'</td><td><div class="bar"><span style="width:'+Math.round(Number(r.redemptions)*100/max)+'%"></span></div></td></tr>').join('')+'</tbody></table>'}
   function participantParams(){const p=new URLSearchParams(qs(true)); if(participantStatus)p.set('status',participantStatus); if(participantCodeFilter==='1'){p.set('minCodes','1');p.set('maxCodes','1')}else if(participantCodeFilter==='2'){p.set('minCodes','2');p.set('maxCodes','2')}else if(participantCodeFilter==='3-5'){p.set('minCodes','3');p.set('maxCodes','5')}else if(participantCodeFilter==='6-10'){p.set('minCodes','6');p.set('maxCodes','10')}else if(participantCodeFilter==='10+'){p.set('minCodes','10')}else if(participantCodeFilter==='50+'){p.set('minCodes','50')} return p}
   function setParticipantCodes(v){participantCodeFilter=v; participantsView()} function setParticipantStatus(v){participantStatus=v; participantsView()}
-  async function participantsView(){const d=await api('/dashboard/api/participants?'+participantParams().toString()); const codeTabs=[['','Hammasi'],['1','1'],['2','2'],['3-5','3-5'],['6-10','6-10'],['10+','10+'],['50+','50+']].map(x=>'<button class="chip '+(participantCodeFilter===x[0]?'active':'')+'" data-participant-codes="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['active','Faol'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(participantStatus===x[0]?'active':'')+'" data-participant-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('participants').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Ism, telefon, Telegram ID, hudud, promokodlar soni, yutuq va ro‘yxatdan o‘tgan vaqt ko‘rsatiladi.</div></div><a class="btn danger" href="/dashboard/export?type=participants&'+participantParams().toString()+'">CSV yuklab olish</a></div><div class="filter-row"><b>Promokodlar soni:</b>'+codeTabs+'</div><div class="filter-row"><b>Holat:</b>'+statusTabs+'</div></div>'+participantsTable(d.rows); document.querySelectorAll('[data-participant-codes]').forEach(b=>b.onclick=()=>setParticipantCodes(b.dataset.participantCodes||'')); document.querySelectorAll('[data-participant-status]').forEach(b=>b.onclick=()=>setParticipantStatus(b.dataset.participantStatus||'')); document.querySelectorAll('[data-open-participant]').forEach(b=>b.onclick=()=>openParticipant(b.dataset.openParticipant))}
+  async function participantsView(){const d=await api(dashPath('/api/participants?')+participantParams().toString()); const codeTabs=[['','Hammasi'],['1','1'],['2','2'],['3-5','3-5'],['6-10','6-10'],['10+','10+'],['50+','50+']].map(x=>'<button class="chip '+(participantCodeFilter===x[0]?'active':'')+'" data-participant-codes="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['active','Faol'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(participantStatus===x[0]?'active':'')+'" data-participant-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('participants').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Ism, telefon, Telegram ID, hudud, promokodlar soni, yutuq va ro‘yxatdan o‘tgan vaqt ko‘rsatiladi.</div></div><a class="btn danger" href="'+dashPath('/export')+'?type=participants&'+participantParams().toString()+'">CSV yuklab olish</a></div><div class="filter-row"><b>Promokodlar soni:</b>'+codeTabs+'</div><div class="filter-row"><b>Holat:</b>'+statusTabs+'</div></div>'+participantsTable(d.rows); document.querySelectorAll('[data-participant-codes]').forEach(b=>b.onclick=()=>setParticipantCodes(b.dataset.participantCodes||'')); document.querySelectorAll('[data-participant-status]').forEach(b=>b.onclick=()=>setParticipantStatus(b.dataset.participantStatus||'')); document.querySelectorAll('[data-open-participant]').forEach(b=>b.onclick=()=>openParticipant(b.dataset.openParticipant))}
   function participantStatusBadge(step){return step==='MENU'||step==='ASK_PROMO_CODE'?'<span class="badge">Faol</span>':'<span class="badge bad">Bloklangan</span>'}
   function participantsTable(rows){if(!rows.length)return '<div class="panel muted">Ishtirokchi topilmadi</div>'; return '<table><thead><tr><th>#</th><th>Ism familiya</th><th>Telegram ID</th><th>Telefon</th><th>Hudud</th><th>Promokodlar soni</th><th>Yutuq</th><th>Holat</th><th>Ro‘yxatdan o‘tgan</th><th>Amal</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.fullName||'-')+'</b></td><td>'+esc(r.telegramId||'-')+'</td><td>'+esc(r.phone||'-')+'</td><td>'+esc(r.address||'-')+'</td><td class="money">'+fmt(r.codesUsed)+'</td><td>'+fmt(r.rewardAmount)+' so‘m</td><td>'+participantStatusBadge(r.step)+'</td><td>'+date(r.createdAt)+'</td><td><button class="btn secondary" data-open-participant="'+esc(r.telegramId)+'">Ko‘rish</button></td></tr>').join('')+'</tbody></table>'}
-  async function openParticipant(telegramId){const d=await api('/dashboard/api/participants/'+encodeURIComponent(telegramId)); const p=d.participant; const codeRows=d.codes.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.code||r.codeSuffix||'-')+'</b></td><td>'+date(r.createdAt)+'</td><td class="money">'+fmt(r.rewardAmount)+'</td><td>'+esc(r.redemptionStatus||'-')+'</td><td>'+paynetBadge(r.paynetStatus)+'</td><td>'+esc(r.providerId||r.providerUuid||r.errorMessage||'-')+'</td></tr>').join(''); el('modal').innerHTML='<div class="modal-card"><div class="modal-head"><div><h2 style="margin:0">'+esc(p.fullName||'-')+'</h2><div class="muted">Telegram ID: '+esc(p.telegramId)+' | '+esc(p.address||'-')+'</div></div><button class="close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="stat-grid"><div class="stat"><div class="label">Telefon</div><b>'+esc(p.phone||'-')+'</b></div><div class="stat"><div class="label">Promokodlar</div><b>'+fmt(p.codesUsed)+'</b></div><div class="stat"><div class="label">Yutuq</div><b>'+fmt(p.rewardAmount)+' so‘m</b></div><div class="stat"><div class="label">Holat</div>'+participantStatusBadge(p.step)+'</div></div><h3>Kiritgan promokodlari</h3>'+(d.codes.length?'<table><thead><tr><th>#</th><th>Promokod</th><th>Sana</th><th>Yutuq</th><th>Status</th><th>Paynet</th><th>Provider/Xato</th></tr></thead><tbody>'+codeRows+'</tbody></table>':'<div class="panel muted">Promokod kiritmagan</div>')+'</div></div>'; el('modal').classList.remove('hidden')}
+  async function openParticipant(telegramId){const d=await api(dashPath('/api/participants/')+encodeURIComponent(telegramId)); const p=d.participant; const codeRows=d.codes.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.code||r.codeSuffix||'-')+'</b></td><td>'+date(r.createdAt)+'</td><td class="money">'+fmt(r.rewardAmount)+'</td><td>'+esc(r.redemptionStatus||'-')+'</td><td>'+paynetBadge(r.paynetStatus)+'</td><td>'+esc(r.providerId||r.providerUuid||r.errorMessage||'-')+'</td></tr>').join(''); el('modal').innerHTML='<div class="modal-card"><div class="modal-head"><div><h2 style="margin:0">'+esc(p.fullName||'-')+'</h2><div class="muted">Telegram ID: '+esc(p.telegramId)+' | '+esc(p.address||'-')+'</div></div><button class="close" onclick="closeModal()">×</button></div><div class="modal-body"><div class="stat-grid"><div class="stat"><div class="label">Telefon</div><b>'+esc(p.phone||'-')+'</b></div><div class="stat"><div class="label">Promokodlar</div><b>'+fmt(p.codesUsed)+'</b></div><div class="stat"><div class="label">Yutuq</div><b>'+fmt(p.rewardAmount)+' so‘m</b></div><div class="stat"><div class="label">Holat</div>'+participantStatusBadge(p.step)+'</div></div><h3>Kiritgan promokodlari</h3>'+(d.codes.length?'<table><thead><tr><th>#</th><th>Promokod</th><th>Sana</th><th>Yutuq</th><th>Status</th><th>Paynet</th><th>Provider/Xato</th></tr></thead><tbody>'+codeRows+'</tbody></table>':'<div class="panel muted">Promokod kiritmagan</div>')+'</div></div>'; el('modal').classList.remove('hidden')}
   function closeModal(){el('modal').classList.add('hidden'); el('modal').innerHTML=''}
   function setCodesMode(v){codesMode=v; if(v==='used'&&(codesStatus==='available'||codesStatus==='blocked'))codesStatus=''; codesView()} function setCodesStatus(v){codesStatus=v; if(v==='available'||v==='blocked')codesMode='all'; codesView()}
-  async function codesView(){const d=await api('/dashboard/api/codes?'+qs()+'&mode='+codesMode+(codesStatus?'&status='+codesStatus:'')); const s=d.summary; const modeTabs=[['used','Kiritilgan promokodlar'],['all','Barcha promokodlar']].map(x=>'<button class="chip '+(codesMode===x[0]?'active':'')+'" data-code-mode="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['winner','Yutuqli'],['available','Kiritilmagan'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(codesStatus===x[0]?'active':'')+'" data-code-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('codes').innerHTML='<div class="kpis"><div class="card"><div class="label">Jami promokodlar</div><div class="value">'+fmt(s.totalCodes)+'</div></div><div class="card hot"><div class="label">Kiritilgan promokodlar</div><div class="value">'+fmt(s.usedCodes)+'</div></div><div class="card"><div class="label">Kiritilmagan</div><div class="value">'+fmt(s.unusedCodes)+'</div></div><div class="card"><div class="label">Yutuqli</div><div class="value">'+fmt(s.winnerCodes)+'</div></div></div><div class="panel"><div class="panel-head"><div><b>Jadval: '+fmt(d.total)+'</b><div class="hint">To‘liq promokod, user, vaqt va payout status ko‘rsatiladi. Eski importlarda to‘liq kod uchun Excelni qayta import qilish kerak.</div></div><a class="btn danger" href="/dashboard/export?type=codes">CSV yuklab olish</a></div><div class="filter-row"><b>Korinish:</b>'+modeTabs+'</div><div class="filter-row"><b>Status:</b>'+statusTabs+'</div></div>'+codesTable(d.rows); document.querySelectorAll('[data-code-mode]').forEach(b=>b.onclick=()=>setCodesMode(b.dataset.codeMode)); document.querySelectorAll('[data-code-status]').forEach(b=>b.onclick=()=>setCodesStatus(b.dataset.codeStatus||''))}
+  async function codesView(){const d=await api(dashPath('/api/codes?')+qs()+'&mode='+codesMode+(codesStatus?'&status='+codesStatus:'')); const s=d.summary; const modeTabs=[['used','Kiritilgan promokodlar'],['all','Barcha promokodlar']].map(x=>'<button class="chip '+(codesMode===x[0]?'active':'')+'" data-code-mode="'+x[0]+'">'+x[1]+'</button>').join(''); const statusTabs=[['','Hammasi'],['winner','Yutuqli'],['available','Kiritilmagan'],['blocked','Bloklangan']].map(x=>'<button class="chip '+(codesStatus===x[0]?'active':'')+'" data-code-status="'+x[0]+'">'+x[1]+'</button>').join(''); el('codes').innerHTML='<div class="kpis"><div class="card"><div class="label">Jami promokodlar</div><div class="value">'+fmt(s.totalCodes)+'</div></div><div class="card hot"><div class="label">Kiritilgan promokodlar</div><div class="value">'+fmt(s.usedCodes)+'</div></div><div class="card"><div class="label">Kiritilmagan</div><div class="value">'+fmt(s.unusedCodes)+'</div></div><div class="card"><div class="label">Yutuqli</div><div class="value">'+fmt(s.winnerCodes)+'</div></div></div><div class="panel"><div class="panel-head"><div><b>Jadval: '+fmt(d.total)+'</b><div class="hint">To‘liq promokod, user, vaqt va payout status ko‘rsatiladi. Eski importlarda to‘liq kod uchun Excelni qayta import qilish kerak.</div></div><a class="btn danger" href="'+dashPath('/export')+'?type=codes">CSV yuklab olish</a></div><div class="filter-row"><b>Korinish:</b>'+modeTabs+'</div><div class="filter-row"><b>Status:</b>'+statusTabs+'</div></div>'+codesTable(d.rows); document.querySelectorAll('[data-code-mode]').forEach(b=>b.onclick=()=>setCodesMode(b.dataset.codeMode)); document.querySelectorAll('[data-code-status]').forEach(b=>b.onclick=()=>setCodesStatus(b.dataset.codeStatus||''))}
   function codesTable(rows){if(!rows.length)return '<div class="panel muted">Promokod topilmadi</div>'; return '<table><thead><tr><th>#</th><th>Promokod</th><th>Ishtirokchi</th><th>Telefon</th><th>Telegram ID</th><th>Hudud</th><th>Sana</th><th>Vaqt</th><th>Yutuq</th><th>Holat</th><th>Paynet</th><th>Provider</th></tr></thead><tbody>'+rows.map((r,i)=>'<tr><td>'+(i+1)+'</td><td><b>'+esc(r.code)+'</b><div class="muted">ID: '+esc(shortId(r.promoCodeId))+'</div></td><td><b>'+esc(r.fullName||'-')+'</b></td><td>'+esc(r.phone||r.paynetPhone||'-')+'</td><td>'+esc(r.telegramId||'-')+'</td><td>'+esc(r.address||'-')+'</td><td>'+day(r.redeemedAt||r.importedAt)+'</td><td>'+time(r.redeemedAt||r.importedAt)+'</td><td class="money">'+fmt(r.rewardAmount)+'</td><td>'+(r.redeemedAt?statusBadge(true,'Kiritilgan'):(r.isActive?'<span class="badge bad">Kiritilmagan</span>':'<span class="badge bad">Bloklangan</span>'))+'<div class="muted">'+esc(r.redemptionStatus||'-')+'</div></td><td>'+paynetBadge(r.paynetStatus)+'<div class="muted">'+(r.paynetAmount?fmt(r.paynetAmount)+' so‘m':'')+'</div></td><td>'+esc(r.providerId||r.providerUuid||'-')+'<div class="muted">'+esc(r.errorMessage||'')+'</div></td></tr>').join('')+'</tbody></table>'}
-  async function regionsView(){const rows=await api('/dashboard/api/regions'); el('regions').innerHTML='<div class="panel">'+table(rows)+'</div>'}
-  async function paymentsView(){const d=await api('/dashboard/api/payments?'+qs()); el('payments').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Paynet tranzaksiyalari, provider javoblari va xatolar nazorati.</div></div><button class="btn danger" onclick="retryFailedPaynet()">Failed payout retry</button></div></div>'+table(d.rows)}
-  async function retryFailedPaynet(){if(!confirm('Failed payoutlar qayta yuborilsinmi?'))return; const result=await api('/dashboard/api/paynet/retry-failed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); alert(JSON.stringify(result,null,2)); load()}
+  async function regionsView(){const rows=await api(dashPath('/api/regions')); el('regions').innerHTML='<div class="panel">'+table(rows)+'</div>'}
+  async function paymentsView(){const d=await api(dashPath('/api/payments?')+qs()); el('payments').innerHTML='<div class="panel"><div class="panel-head"><div><b>Jami: '+fmt(d.total)+'</b><div class="hint">Paynet tranzaksiyalari, provider javoblari va xatolar nazorati.</div></div><button class="btn danger" onclick="retryFailedPaynet()">Failed payout retry</button></div></div>'+table(d.rows)}
+  async function retryFailedPaynet(){if(!confirm('Failed payoutlar qayta yuborilsinmi?'))return; const result=await api(dashPath('/api/paynet/retry-failed'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); alert(JSON.stringify(result,null,2)); load()}
   function syncExportStatus(){const type=el('exportType').value; const status=el('exportStatus'); if(type==='participants'){status.innerHTML='<option value="">Hammasi</option><option value="active">Faol</option><option value="blocked">Bloklangan / tugallanmagan</option>'}else if(type==='codes'){status.innerHTML='<option value="">Hammasi</option><option value="used">Kiritilgan</option><option value="winner">Yutuqli</option><option value="available">Kiritilmagan</option><option value="blocked">Bloklangan</option>'}else{status.innerHTML='<option value="">Hammasi</option>';}}
   function exportView(){el('export').innerHTML='<div class="grid2"><div class="panel"><h3>Filtrlar</h3><div class="hint">Hudud, sana oraligi, holat va promokodlar soni bo‘yicha saralab natija ko‘riladi va CSV yuklab olinadi.</div><label>Malumot turi</label><select id="exportType"><option value="participants">Ishtirokchilar</option><option value="codes">Kiritilgan promokodlar</option><option value="regions">Hududlar statistikasi</option></select><label>Qidirish</label><input id="exportQ" placeholder="Ism, telefon, telegram ID yoki promokod"/><label>Hudud</label><select id="exportRegion"></select><div class="grid2"><div><label>Sanadan</label><input id="exportFrom" type="date"/></div><div><label>Sanagacha</label><input id="exportTo" type="date"/></div></div><label>Holat</label><select id="exportStatus"></select><div class="grid2"><div><label>Promokodlar soni kamida</label><input id="exportMinCodes" type="number" min="0" placeholder="0"/></div><div><label>Promokodlar soni ko‘pi bilan</label><input id="exportMaxCodes" type="number" min="0" placeholder="Masalan: 10"/></div></div><div class="actions" style="margin-top:16px"><button class="btn" onclick="previewExport()">Natijani ko‘rish</button><button class="btn secondary" onclick="clearExportFilters()">Tozalash</button></div></div><div class="panel"><h3>Yuklab olish</h3><p>Ishtirokchilar eksportida user ID, ism familiya, telefon, hudud, holat, ro‘yxatdan o‘tgan sana, promokodlar soni, yutuq summa va oxirgi promokod vaqti chiqadi.</p><p>Kiritilgan promokodlar eksportida promokod, user, hudud, sana, yutuq, Paynet va xato ma’lumotlari chiqadi.</p><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div><div id="exportResult"></div>'; el('exportRegion').innerHTML=el('region').innerHTML; el('exportQ').value=el('q').value; el('exportRegion').value=el('region').value; el('exportFrom').value=el('from').value; el('exportTo').value=el('to').value; el('exportType').onchange=()=>{syncExportStatus(); el('exportResult').innerHTML=''}; syncExportStatus()}
   function exportParams(){const p=new URLSearchParams(); const q=el('exportQ').value.trim(), region=el('exportRegion').value, from=el('exportFrom').value, to=el('exportTo').value, status=el('exportStatus').value, min=el('exportMinCodes').value, max=el('exportMaxCodes').value; if(q)p.set('q',q); if(region)p.set('region',region); if(from)p.set('from',from); if(to)p.set('to',to); if(status)p.set('status',status); if(min)p.set('minCodes',min); if(max)p.set('maxCodes',max); return p}
   function clearExportFilters(){el('exportQ').value=''; el('exportRegion').value=''; el('exportFrom').value=''; el('exportTo').value=''; el('exportStatus').value=''; el('exportMinCodes').value=''; el('exportMaxCodes').value=''; el('exportResult').innerHTML=''}
-  async function previewExport(){const type=el('exportType').value; const p=exportParams(); el('exportResult').innerHTML='<div class="panel muted">Natija yuklanmoqda...</div>'; const d=await api('/dashboard/api/export-preview?type='+encodeURIComponent(type)+'&'+p.toString()); const note=d.limited?'<div class="hint">Jadvalda birinchi 100 qator ko‘rsatildi. To‘liq ro‘yxat uchun CSV yuklab oling.</div>':''; el('exportResult').innerHTML='<div class="panel"><div class="panel-head"><div><b>Natija: '+fmt(d.total)+(d.limited?'+':'')+'</b>'+note+'</div><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'+table(d.rows)}
-  function downloadExport(){const type=el('exportType').value; const p=exportParams(); location='/dashboard/export?type='+encodeURIComponent(type)+'&'+p.toString()}
+  async function previewExport(){const type=el('exportType').value; const p=exportParams(); el('exportResult').innerHTML='<div class="panel muted">Natija yuklanmoqda...</div>'; const d=await api(dashPath('/api/export-preview?type=')+encodeURIComponent(type)+'&'+p.toString()); const note=d.limited?'<div class="hint">Jadvalda birinchi 100 qator ko‘rsatildi. To‘liq ro‘yxat uchun CSV yuklab oling.</div>':''; el('exportResult').innerHTML='<div class="panel"><div class="panel-head"><div><b>Natija: '+fmt(d.total)+(d.limited?'+':'')+'</b>'+note+'</div><button class="btn danger" onclick="downloadExport()">CSV yuklab olish</button></div></div>'+table(d.rows)}
+  function downloadExport(){const type=el('exportType').value; const p=exportParams(); location=dashPath('/export')+'?type='+encodeURIComponent(type)+'&'+p.toString()}
   setInterval(()=>el('clock').textContent=new Date().toLocaleTimeString(),1000); setInterval(()=>load().catch(()=>{}),30000); load();
   </script></body></html>`;
 }
@@ -1021,19 +1044,19 @@ export async function handleAdminRequest(
   res: ServerResponse,
   dataSource: DataSource,
 ): Promise<boolean> {
-  if (!req.url?.startsWith("/admin") && !req.url?.startsWith("/dashboard")) {
+  const url = new URL(req.url ?? "/", "http://localhost");
+
+  if (url.pathname !== "/admin" && !isDashboardPath(url.pathname)) {
     return false;
   }
 
-  const url = new URL(req.url, "http://localhost");
-
   try {
     if (url.pathname === "/admin") {
-      redirect(res, "/dashboard");
+      redirect(res, dashboardBasePath);
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/login") {
+    if (req.method === "GET" && url.pathname === dashboardLoginPath) {
       if (!credentials()) {
         sendHtml(res, disabledHtml(), 503);
         return true;
@@ -1042,7 +1065,7 @@ export async function handleAdminRequest(
       return true;
     }
 
-    if (req.method === "POST" && url.pathname === "/dashboard/login") {
+    if (req.method === "POST" && url.pathname === dashboardLoginPath) {
       if (isLoginLimited(req)) {
         audit(req, "login_rate_limited");
         sendHtml(res, loginHtml("Juda ko'p noto'g'ri urinish. 10 daqiqadan keyin qayta urinib ko'ring."), 429);
@@ -1060,11 +1083,11 @@ export async function handleAdminRequest(
       clearFailedLogins(req);
       audit(req, "login_success", { login: auth.username });
       setSession(res);
-      redirect(res, "/dashboard");
+      redirect(res, dashboardBasePath);
       return true;
     }
 
-    if (req.method === "POST" && url.pathname === "/dashboard/logout") {
+    if (req.method === "POST" && url.pathname === dashboardLogoutPath) {
       audit(req, "logout");
       clearSession(res);
       sendJson(res, 200, { ok: true });
@@ -1075,43 +1098,43 @@ export async function handleAdminRequest(
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard") {
+    if (req.method === "GET" && (url.pathname === dashboardBasePath || url.pathname === dashboardPath("/"))) {
       sendHtml(res, dashboardHtml());
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/api/overview") {
+    if (req.method === "GET" && url.pathname === dashboardPath("/api/overview")) {
       sendJson(res, 200, await getOverview(dataSource, url));
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/api/participants") {
+    if (req.method === "GET" && url.pathname === dashboardPath("/api/participants")) {
       sendJson(res, 200, await getParticipants(dataSource, url));
       return true;
     }
 
-    if (req.method === "GET" && url.pathname.startsWith("/dashboard/api/participants/")) {
-      const telegramId = decodeURIComponent(url.pathname.slice("/dashboard/api/participants/".length));
+    if (req.method === "GET" && url.pathname.startsWith(dashboardParticipantDetailPath)) {
+      const telegramId = decodeURIComponent(url.pathname.slice(dashboardParticipantDetailPath.length));
       sendJson(res, 200, await getParticipantDetail(dataSource, telegramId));
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/api/codes") {
+    if (req.method === "GET" && url.pathname === dashboardPath("/api/codes")) {
       sendJson(res, 200, await getCodes(dataSource, url));
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/api/regions") {
+    if (req.method === "GET" && url.pathname === dashboardPath("/api/regions")) {
       sendJson(res, 200, await getRegions(dataSource, url));
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/api/payments") {
+    if (req.method === "GET" && url.pathname === dashboardPath("/api/payments")) {
       sendJson(res, 200, await getPayments(dataSource, url));
       return true;
     }
 
-    if (req.method === "POST" && url.pathname === "/dashboard/api/paynet/retry-failed") {
+    if (req.method === "POST" && url.pathname === dashboardPath("/api/paynet/retry-failed")) {
       const body = await readJson(req);
       const redemptionId = typeof body.redemptionId === "string" ? body.redemptionId : undefined;
       const limit = typeof body.limit === "number" ? body.limit : 20;
@@ -1120,14 +1143,14 @@ export async function handleAdminRequest(
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/api/export-preview") {
+    if (req.method === "GET" && url.pathname === dashboardPath("/api/export-preview")) {
       const type = url.searchParams.get("type") ?? "participants";
       const rows = await exportRows(dataSource, type, url, 100);
       sendJson(res, 200, { total: rows.length, limited: rows.length === 100, rows });
       return true;
     }
 
-    if (req.method === "GET" && url.pathname === "/dashboard/export") {
+    if (req.method === "GET" && url.pathname === dashboardExportPath) {
       const type = url.searchParams.get("type") ?? "codes";
       audit(req, "export_download", { type, filters: filterKeys(url) });
       sendCsv(res, `${type}.csv`, await exportRows(dataSource, type, url));

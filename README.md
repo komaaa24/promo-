@@ -48,6 +48,18 @@ Dashboard `HTTP_PORT` dagi serverda ishlaydi:
 https://your-domain.uz/dashboard
 ```
 
+Dashboard path `.env` orqali o'zgartiriladi. Masalan Hyundai uchun:
+
+```env
+DASHBOARD_BASE_PATH=/hyundai/dashboard
+```
+
+Shunda panel URL:
+
+```text
+https://oilux.uz/hyundai/dashboard
+```
+
 IP bilan testda:
 
 ```text
@@ -59,6 +71,7 @@ http://161.35.219.212:3000/dashboard
 ```env
 DASH_LOGIN=admin
 DASH_PASS=strong-random-password
+DASHBOARD_BASE_PATH=/dashboard
 DASH_COOKIE_SECURE=true
 ```
 
@@ -144,9 +157,10 @@ Production checklist:
 - `.env` faylini gitga qo'shmang.
 - Telegram bot token, Digital Pay token/parol, Postgres parol va server root parolini hech kimga yubormang; chatga tushgan bo'lsa rotate qiling.
 - Domain va HTTPS qo'ying, keyin `PUBLIC_BASE_URL=https://your-domain.uz` va `DASH_COOKIE_SECURE=true` qiling.
+- Agar panel alohida path ostida ishlasa, masalan `https://oilux.uz/hyundai/dashboard`, server `.env` ichida `DASHBOARD_BASE_PATH=/hyundai/dashboard` qiling.
 - `DIGITAL_PAY_TIMEOUT_MS=15000` yoki undan yuqori qiling.
 - Kunlik Postgres backup qo'ying.
-- `/health`, `pm2 ls`, `pm2 logs promo-bot` va `/dashboard` panelni muntazam tekshiring.
+- `/health`, `pm2 ls`, `pm2 logs promo-bot` va sozlangan dashboard URLni muntazam tekshiring.
 - Failed/Pending Paynet bo'lsa avval sababini ko'ring, keyin dashboarddan retry qiling.
 - Katta eksportlar uchun avval preview qiling, keyin CSV yuklab oling.
 

@@ -54,6 +54,7 @@ export const env = {
   admin: {
     username: process.env.DASH_LOGIN ?? process.env.ADMIN_USERNAME,
     password: process.env.DASH_PASS ?? process.env.ADMIN_PASSWORD,
+    basePath: process.env.DASHBOARD_BASE_PATH ?? "/dashboard",
     cookieSecure: optionalBoolean("DASH_COOKIE_SECURE", false),
   },
   digitalPay: {
