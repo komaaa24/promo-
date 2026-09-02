@@ -13,6 +13,7 @@ type MessageKey =
   | "invalidFullName"
   | "invalidPhone"
   | "savedProfile"
+  | "alreadyRegistered"
   | "registrationSuccess"
   | "congratulations"
   | "promoCodeAsk"
@@ -53,6 +54,7 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     invalidFullName: "Iltimos, ism va familiyangizni to'liq kiriting.",
     invalidPhone: "Telefon raqam noto'g'ri. Masalan: +998901234567",
     savedProfile: "Ma'lumotlaringiz saqlandi.",
+    alreadyRegistered: "Siz allaqachon ro'yxatdan o'tgansiz. Qayta ro'yxatdan o'tish shart emas.",
     registrationSuccess: "Siz muvaffaqiyatli ro'yxatdan o'tdingiz.",
     congratulations: "Tabriklaymiz!",
     promoCodeAsk: "Promo kodni yuboring:",
@@ -72,7 +74,7 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     cabinet: "Kabinet",
     languageMenu: "Tilni tanlang:",
     terms: "📄 Promoaksiya shartlari hozircha tayyorlanmoqda.",
-    media: "📲 Media sahifalar hozircha tayyorlanmoqda.",
+    media: "📲 Rasmiy media sahifalarimiz:",
     offerMedia: "Oferta va media sahifalari hozircha tayyorlanmoqda.",
     languageChanged: "Til o'zgartirildi.",
     regionSelected: "tanlandi ✅",
@@ -92,6 +94,7 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     invalidFullName: "Пожалуйста, введите имя и фамилию полностью.",
     invalidPhone: "Неверный номер телефона. Например: +998901234567",
     savedProfile: "Ваши данные сохранены.",
+    alreadyRegistered: "Вы уже зарегистрированы. Повторная регистрация не требуется.",
     registrationSuccess: "Вы успешно зарегистрировались.",
     congratulations: "Поздравляем!",
     promoCodeAsk: "Отправьте промокод:",
@@ -111,7 +114,7 @@ const messages: Record<LanguageCode, Record<MessageKey, string>> = {
     cabinet: "Кабинет",
     languageMenu: "Выберите язык:",
     terms: "📄 Условия акции пока готовятся.",
-    media: "📲 Медиа страницы пока готовятся.",
+    media: "📲 Наши официальные медиа страницы:",
     offerMedia: "Оферта и медиа страницы пока готовятся.",
     languageChanged: "Язык изменен.",
     regionSelected: "выбран ✅",

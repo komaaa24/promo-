@@ -88,6 +88,28 @@ export function mainMenuKeyboard(language: LanguageCode): Keyboard {
     .resized();
 }
 
+export function mediaInlineKeyboard(language: LanguageCode): InlineKeyboard {
+  const labels =
+    language === "uz"
+      ? {
+          instagram: "Instagram",
+          telegram: "Telegram kanal",
+          website: "Saytimiz",
+        }
+      : {
+          instagram: "Instagram",
+          telegram: "Telegram канал",
+          website: "Наш сайт",
+        };
+
+  return new InlineKeyboard()
+    .url(labels.instagram, "https://www.instagram.com/oilux.uz/")
+    .row()
+    .url(labels.telegram, "https://t.me/Oilux_Uz")
+    .row()
+    .url(labels.website, "https://asrgroup.uz/uz/company/oilux");
+}
+
 export function cabinetKeyboard(language: LanguageCode): Keyboard {
   const b = buttons[language];
 

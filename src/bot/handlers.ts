@@ -6,11 +6,12 @@ import {
   districtInlineKeyboard,
   languageKeyboard,
   mainMenuKeyboard,
+  mediaInlineKeyboard,
   phoneKeyboard,
   regionInlineKeyboard,
 } from "./keyboards";
 import { t } from "./i18n";
-import { LanguageCode } from "../entities/TelegramUser";
+import { LanguageCode, TelegramUser, UserStep } from "../entities/TelegramUser";
 import { UserService } from "./user-service";
 import { getDistrictByIndex, getRegion, getRegionByIndex, isDistrict, Region } from "./locations";
 import { env } from "../config/env";
@@ -40,11 +41,58 @@ function isPromoConfigured(): boolean {
 }
 
 function formatPromoRedemption(redemption: PromoCodeRedemption, index: number): string {
+  const code = redemption.promoCode?.codeEncrypted ?? redemption.promoCode?.codeSuffix ?? redemption.promoCodeId.slice(0, 8);
+  const createdAt = redemption.createdAt.toLocaleString("ru-RU");
+  const payout = redemption.paynetTransaction?.status ? `\nPaynet: ${redemption.paynetTransaction.status}` : "";
+
   return [
-    `${index + 1}. ${redemption.rewardAmount} so'm`,
+    `${index + 1}. Promokod: ${code}`,
+    `Sana: ${createdAt}`,
+    `Yutuq: ${redemption.rewardAmount} so'm`,
     `Status: ${redemption.status}`,
-    `ID: ${redemption.id.slice(0, 8)}`,
+    `ID: ${redemption.id.slice(0, 8)}${payout}`,
   ].join("\n");
+}
+
+function isProfileComplete(user: TelegramUser): boolean {
+  return Boolean(user.fullName?.trim() && user.phone?.trim() && user.address?.trim());
+}
+
+function nextRegistrationStep(user: TelegramUser): UserStep {
+  if (!user.fullName?.trim()) {
+    return "ASK_FULL_NAME";
+  }
+
+  if (!user.phone?.trim()) {
+    return "ASK_PHONE";
+  }
+
+  if (!user.address?.trim()) {
+    return "ASK_REGION";
+  }
+
+  return "MENU";
+}
+
+function chunkMessages(lines: string[], maxLength = 3500): string[] {
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const line of lines) {
+    const next = current ? `${current}\n\n${line}` : line;
+    if (next.length > maxLength && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks;
 }
 
 function isMenuButton(language: LanguageCode, text: string): boolean {
@@ -146,14 +194,26 @@ export function registerHandlers(
   promoCodeService: PromoCodeService,
 ): void {
   bot.command("start", async (ctx) => {
-    ctx.dbUser.step = "ASK_FULL_NAME";
-    await userService.setStep(ctx.dbUser, "ASK_FULL_NAME");
-    await ctx.reply(`${t(ctx.dbUser.language, "start")}\n\n${t(ctx.dbUser.language, "askFullName")}`, {
-      reply_markup: languageKeyboard(ctx.dbUser.language),
-    });
+    if (isProfileComplete(ctx.dbUser)) {
+      await userService.setStep(ctx.dbUser, "MENU");
+      await ctx.reply(`${t(ctx.dbUser.language, "alreadyRegistered")}\n\n${t(ctx.dbUser.language, "mainMenu")}`, {
+        reply_markup: mainMenuKeyboard(ctx.dbUser.language),
+      });
+      return;
+    }
+
+    const step = nextRegistrationStep(ctx.dbUser);
+    await userService.setStep(ctx.dbUser, step);
+    await ctx.reply(t(ctx.dbUser.language, "start"));
+    await repeatCurrentStep(ctx, userService);
   });
 
   bot.hears([buttons.uz.promoSend, buttons.ru.promoSend], async (ctx) => {
+    if (!isProfileComplete(ctx.dbUser)) {
+      await repeatCurrentStep(ctx, userService);
+      return;
+    }
+
     if (!isPromoConfigured()) {
       await ctx.reply(t(ctx.dbUser.language, "promoNotConfigured"), {
         reply_markup: mainMenuKeyboard(ctx.dbUser.language),
@@ -168,6 +228,11 @@ export function registerHandlers(
   });
 
   bot.hears([buttons.uz.promoMine, buttons.ru.promoMine], async (ctx) => {
+    if (!isProfileComplete(ctx.dbUser)) {
+      await repeatCurrentStep(ctx, userService);
+      return;
+    }
+
     const codes = await promoCodeService.listForUser(ctx.dbUser);
 
     if (codes.length === 0) {
@@ -177,12 +242,21 @@ export function registerHandlers(
       return;
     }
 
-    const list = codes.map(formatPromoRedemption).join("\n\n");
+    const messages = chunkMessages(codes.map(formatPromoRedemption));
 
-    await ctx.reply(list, { reply_markup: mainMenuKeyboard(ctx.dbUser.language) });
+    for (const [index, message] of messages.entries()) {
+      await ctx.reply(message, {
+        reply_markup: index === messages.length - 1 ? mainMenuKeyboard(ctx.dbUser.language) : undefined,
+      });
+    }
   });
 
   bot.hears([buttons.uz.cabinet, buttons.ru.cabinet], async (ctx) => {
+    if (!isProfileComplete(ctx.dbUser)) {
+      await repeatCurrentStep(ctx, userService);
+      return;
+    }
+
     const user = ctx.dbUser;
     const profile = [
       `👤 ${t(user.language, "cabinet")}`,
@@ -210,6 +284,9 @@ export function registerHandlers(
 
   bot.hears([buttons.uz.media, buttons.ru.media], async (ctx) => {
     await ctx.reply(t(ctx.dbUser.language, "media"), {
+      reply_markup: mediaInlineKeyboard(ctx.dbUser.language),
+    });
+    await ctx.reply(t(ctx.dbUser.language, "mainMenu"), {
       reply_markup: mainMenuKeyboard(ctx.dbUser.language),
     });
   });
